@@ -27,7 +27,7 @@ Create local configuration:
 cp .env.example .env
 ```
 
-Configuration is loaded with `pydantic-settings` from `.env`. Use `OPENAI_BASE_URL` for an optional OpenAI-compatible base URL, `OPENAI_MODEL` for the live model, and `ADFOUNDRY_RUN_MODE` for the default runtime mode. If Chromium was downloaded manually, set `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` to the browser executable path.
+Configuration is loaded with `pydantic-settings` from `.env`. Use `OPENAI_BASE_URL` for an optional OpenAI-compatible base URL, `OPENAI_MODEL` for text/agent reasoning, `OPENAI_IMAGE_MODEL` for image generation, and `ADFOUNDRY_RUN_MODE` for the default runtime mode. For AvalAI, use `OPENAI_BASE_URL=https://api.avalai.ir/v1` and an AvalAI-supported image model such as `gpt-image-1.5`. If Chromium was downloaded manually, set `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` to the browser executable path. Image generation is controlled by `ADFOUNDRY_ENABLE_IMAGE_GENERATION`, `ADFOUNDRY_IMAGE_SIZE`, `ADFOUNDRY_IMAGE_QUALITY`, `ADFOUNDRY_IMAGE_FORMAT`, and `ADFOUNDRY_IMAGE_MAX_REFERENCES`.
 
 Run the app:
 

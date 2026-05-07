@@ -6,6 +6,7 @@ from bs4 import BeautifulSoup
 from PIL import Image, ImageDraw
 
 from adfoundry.fixtures import fixture_page_research
+from adfoundry.image_assets import dedupe_and_score_images, extract_image_candidates_from_html
 from adfoundry.models import CampaignBrief, PageImage, PageResearch, RunMode, normalize_url
 from adfoundry.settings import Settings, get_settings
 
@@ -74,6 +75,36 @@ def _research_page_live(brief: CampaignBrief, output_dir: Path) -> PageResearch:
             }
             """
         )
+        visible_images = page.evaluate(
+            """
+            () => Array.from(document.images).slice(0, 80).map((img) => {
+              const rect = img.getBoundingClientRect();
+              return {
+                url: img.currentSrc || img.src,
+                alt: img.alt || "",
+                width: img.naturalWidth || Math.round(rect.width),
+                height: img.naturalHeight || Math.round(rect.height),
+                role: rect.width > 500 || rect.height > 300 ? "hero" : "asset",
+                source: "browser"
+              };
+            }).filter((img) => img.url)
+            """
+        )
+        background_urls = page.evaluate(
+            """
+            () => {
+              const urls = new Set();
+              for (const el of Array.from(document.querySelectorAll('*')).slice(0, 900)) {
+                const bg = getComputedStyle(el).backgroundImage;
+                if (!bg || bg === 'none') continue;
+                for (const match of bg.matchAll(/url\\(["']?(.*?)["']?\\)/g)) {
+                  if (match[1] && !match[1].startsWith('data:')) urls.add(match[1]);
+                }
+              }
+              return Array.from(urls).slice(0, 32);
+            }
+            """
+        )
         browser.close()
 
     soup = BeautifulSoup(html, "html.parser")
@@ -87,7 +118,19 @@ def _research_page_live(brief: CampaignBrief, output_dir: Path) -> PageResearch:
         if tag.get_text(" ", strip=True)
     ][:16]
     text = " ".join(soup.get_text(" ", strip=True).split())[:1200]
-    images = _extract_images(soup, final_url)
+    html_images = extract_image_candidates_from_html(html, final_url, background_urls)
+    browser_images = [
+        PageImage(
+            url=item.get("url", ""),
+            alt=item.get("alt", ""),
+            width=_safe_int(item.get("width")),
+            height=_safe_int(item.get("height")),
+            role=item.get("role", "asset"),
+            source=item.get("source", "browser"),
+        )
+        for item in visible_images
+    ]
+    images = dedupe_and_score_images([*html_images, *browser_images])
     logos = [
         img.url
         for img in images
@@ -109,28 +152,6 @@ def _research_page_live(brief: CampaignBrief, output_dir: Path) -> PageResearch:
         source="live",
         notes=["Live Playwright research completed."],
     )
-
-
-def _extract_images(soup: BeautifulSoup, final_url: str) -> list[PageImage]:
-    from urllib.parse import urljoin
-
-    images: list[PageImage] = []
-    for img in soup.find_all("img")[:24]:
-        src = img.get("src") or img.get("data-src") or ""
-        if not src:
-            continue
-        alt = img.get("alt", "")
-        role = "logo" if "logo" in alt.lower() or "logo" in src.lower() else "asset"
-        images.append(
-            PageImage(
-                url=urljoin(final_url, src),
-                alt=alt,
-                width=_safe_int(img.get("width")),
-                height=_safe_int(img.get("height")),
-                role=role,
-            )
-        )
-    return images
 
 
 def _safe_int(value: object) -> int | None:
@@ -196,7 +217,9 @@ def render_campaign_html(html: str, output_dir: Path) -> tuple[str, str, str]:
 
 
 def _chromium_launch_options(settings: Settings) -> dict[str, object]:
-    options: dict[str, object] = {"headless": True}
+    options: dict[str, object] = {"headless": settings.browser_headless}
+    if settings.browser_slow_mo_ms > 0:
+        options["slow_mo"] = settings.browser_slow_mo_ms
     if settings.playwright_chromium_executable_path:
         options["executable_path"] = settings.playwright_chromium_executable_path
     return options

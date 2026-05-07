@@ -36,7 +36,7 @@ def main() -> None:
             index=["hybrid", "fixture", "live"].index(settings.default_run_mode),
             help="Hybrid tries live services and falls back to fixtures.",
         )
-        run = st.button("Build Campaign", type="primary", use_container_width=True)
+        run = st.button("Build Campaign", type="primary", width="stretch")
 
     if run or "package" not in st.session_state:
         if run:
@@ -100,9 +100,46 @@ def main() -> None:
         st.write(package.campaign_copy.subheadline)
         st.link_button(package.campaign_copy.cta, package.brief.url)
 
+        st.subheader("Brand Image Pipeline")
+        image_asset = package.campaign_image_asset
+        st.caption(
+            "Campaign drafts may use public brand references. Confirm usage rights before production."
+        )
+        asset_cols = st.columns(3)
+        asset_cols[0].metric("Image mode", image_asset.generation_mode)
+        asset_cols[1].metric("References", len(image_asset.reference_image_paths))
+        asset_cols[2].metric("Candidates", len(package.page_research.image_assets))
+        if image_asset.fallback_reason:
+            st.info(image_asset.fallback_reason)
+        if image_asset.hero_image_path:
+            st.image(image_asset.hero_image_path, caption="Selected campaign hero image", width="stretch")
+        with st.expander("Seasonal image prompt"):
+            st.write(image_asset.generation_prompt)
+            if image_asset.revised_prompt:
+                st.caption("OpenAI revised prompt")
+                st.write(image_asset.revised_prompt)
+        with st.expander("Extracted image candidates"):
+            rows = [
+                {
+                    "score": image.score,
+                    "role": image.role,
+                    "source": image.source,
+                    "size": f"{image.width or '?'}x{image.height or '?'}",
+                    "url": image.url,
+                    "reason": image.score_reason,
+                }
+                for image in package.page_research.image_assets[:12]
+            ]
+            st.dataframe(rows, width="stretch")
+        if image_asset.reference_image_paths:
+            with st.expander("Selected reference images"):
+                ref_cols = st.columns(min(3, len(image_asset.reference_image_paths)))
+                for index, path in enumerate(image_asset.reference_image_paths):
+                    ref_cols[index % len(ref_cols)].image(path, caption=Path(path).name, width="stretch")
+
         preview_path = Path(package.preview_html_path)
         if preview_path.exists():
-            st.components.v1.html(preview_path.read_text(encoding="utf-8"), height=760, scrolling=True)
+            st.iframe(preview_path, height=760, width="stretch")
 
         st.subheader("Visual QA")
         st.write(package.qa_report.summary)
@@ -123,9 +160,9 @@ def main() -> None:
 
         image_cols = st.columns(2)
         if package.desktop_screenshot:
-            image_cols[0].image(package.desktop_screenshot, caption="Desktop render", use_container_width=True)
+            image_cols[0].image(package.desktop_screenshot, caption="Desktop render", width="stretch")
         if package.mobile_screenshot:
-            image_cols[1].image(package.mobile_screenshot, caption="Mobile render", use_container_width=True)
+            image_cols[1].image(package.mobile_screenshot, caption="Mobile render", width="stretch")
 
     with tab_export:
         st.subheader("Campaign Package")

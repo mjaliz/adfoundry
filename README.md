@@ -52,11 +52,31 @@ Supported `.env` keys:
 - `OPENAI_API_KEY`: enables live OpenAI agent reasoning.
 - `OPENAI_BASE_URL`: optional OpenAI-compatible API base URL.
 - `OPENAI_MODEL`: model used by the OpenAI Responses API adapter.
+- `OPENAI_IMAGE_MODEL`: image model used by the OpenAI-compatible Images API, default `gpt-image-1.5`.
 - `OPENAI_TIMEOUT_SECONDS`: OpenAI request timeout.
 - `ADFOUNDRY_RUN_MODE`: `hybrid`, `fixture`, or `live`.
 - `ADFOUNDRY_OUTPUT_ROOT`: directory for generated campaign packages.
 - `ADFOUNDRY_BROWSER_TIMEOUT_MS`: Playwright page load timeout.
+- `ADFOUNDRY_BROWSER_HEADLESS`: set `false` to show Chromium while screenshots are captured.
+- `ADFOUNDRY_BROWSER_SLOW_MO_MS`: optional Playwright operation delay for headed demos.
 - `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH`: optional path to a manually downloaded Chromium executable.
+- `ADFOUNDRY_ENABLE_IMAGE_GENERATION`: enables OpenAI image generation when an API key is available.
+- `ADFOUNDRY_IMAGE_SIZE`: requested generated image size, default `1536x1024`.
+- `ADFOUNDRY_IMAGE_QUALITY`: generated image quality, default `medium`.
+- `ADFOUNDRY_IMAGE_FORMAT`: generated image format, default `png`.
+- `ADFOUNDRY_IMAGE_MAX_REFERENCES`: maximum source images sent as references.
+
+For AvalAI, use your AvalAI API key and OpenAI-compatible base URL:
+
+```env
+OPENAI_API_KEY=your_avalai_key
+OPENAI_BASE_URL=https://api.avalai.ir/v1
+OPENAI_IMAGE_MODEL=gpt-image-2
+```
+
+AvalAI also lists `gpt-image-1.5` as supported. Scraped reference images are normalized
+before image-edit calls; if AvalAI rejects a reference edit, AdFoundry retries as
+text-to-image before falling back to source imagery.
 
 If you manually downloaded Chromium, set `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` in `.env` and skip `.venv/bin/python3 -m playwright install`:
 
@@ -199,4 +219,10 @@ The demo should emphasize this loop:
 
 ```text
 Generate -> Inspect -> Critique -> Repair -> Approve
+```
+
+The image pipeline should emphasize this loop:
+
+```text
+Extract landing-page images -> Score candidates -> Cache references -> Generate/edit seasonal hero -> Render HTML campaign
 ```

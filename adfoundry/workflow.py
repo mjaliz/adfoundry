@@ -1,12 +1,22 @@
 from __future__ import annotations
 
 import json
+import warnings
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal, TypedDict
 from uuid import uuid4
 
+from langchain_core._api.deprecation import LangChainPendingDeprecationWarning
+
+warnings.filterwarnings(
+    "ignore",
+    message=r"The default value of `allowed_objects` will change.*",
+    category=LangChainPendingDeprecationWarning,
+    module=r"langgraph\.cache\.base.*",
+)
 from langgraph.graph import END, START, StateGraph
+from loguru import logger
 from pydantic import BaseModel
 
 from adfoundry.browser import render_campaign_html, research_page
@@ -19,6 +29,8 @@ from adfoundry.fixtures import (
     fixture_strategy_options,
     fixture_visual_concept,
 )
+from adfoundry.image_assets import build_campaign_image_asset
+from adfoundry.logging_config import configure_logging
 from adfoundry.llm import OpenAIModelGateway, json_prompt
 from adfoundry.models import (
     AgentActivity,
@@ -26,6 +38,7 @@ from adfoundry.models import (
     CampaignBrief,
     CampaignCopy,
     CampaignHtml,
+    CampaignImageAsset,
     CampaignPackage,
     DecisionRecord,
     PageResearch,
@@ -51,6 +64,7 @@ class CampaignState(TypedDict, total=False):
     selected_strategy: StrategyOption
     decisions: list[DecisionRecord]
     visual_concept: VisualConcept
+    campaign_image_asset: CampaignImageAsset
     campaign_copy: CampaignCopy
     campaign_html: CampaignHtml
     qa_report: QaReport
@@ -83,6 +97,16 @@ def run_campaign(
     run_id = datetime.now(UTC).strftime("%Y%m%d%H%M%S") + "-" + uuid4().hex[:8]
     output_dir = Path(output_root) / run_id
     output_dir.mkdir(parents=True, exist_ok=True)
+    configure_logging(output_dir=output_dir, run_id=run_id, level=settings.log_level)
+    logger.info(
+        "Campaign run started run_id={} mode={} url={} theme={} goal={} output_dir={}",
+        run_id,
+        mode,
+        normalized_brief.url,
+        normalized_brief.theme,
+        normalized_brief.goal,
+        output_dir,
+    )
 
     graph = build_graph()
     initial_state: CampaignState = {
@@ -96,6 +120,7 @@ def run_campaign(
         "repair_attempts": 0,
     }
     final_state = graph.invoke(initial_state)
+    logger.info("Campaign run finished run_id={} output_dir={}", run_id, output_dir)
     return final_state["package"]
 
 
@@ -105,6 +130,7 @@ def build_graph():
     builder.add_node("brand", _brand_node)
     builder.add_node("strategy", _strategy_node)
     builder.add_node("creative", _creative_node)
+    builder.add_node("image_asset", _image_asset_node)
     builder.add_node("ui", _ui_node)
     builder.add_node("render", _render_node)
     builder.add_node("qa", _qa_node)
@@ -115,7 +141,8 @@ def build_graph():
     builder.add_edge("research", "brand")
     builder.add_edge("brand", "strategy")
     builder.add_edge("strategy", "creative")
-    builder.add_edge("creative", "ui")
+    builder.add_edge("creative", "image_asset")
+    builder.add_edge("image_asset", "ui")
     builder.add_edge("ui", "render")
     builder.add_edge("render", "qa")
     builder.add_conditional_edges(
@@ -129,6 +156,7 @@ def build_graph():
 
 
 def _research_node(state: CampaignState) -> CampaignState:
+    logger.info("Workflow step start: research")
     page = research_page(state["brief"], state["output_dir"], state["mode_requested"])
     activities = _append_activity(
         state,
@@ -139,10 +167,19 @@ def _research_node(state: CampaignState) -> CampaignState:
     mode_used = (
         "fixture" if page.source in {"fixture", "fallback"} else state["mode_requested"]
     )
+    logger.info(
+        "Workflow step done: research source={} images={} colors={} screenshots=({}, {})",
+        page.source,
+        len(page.image_assets),
+        len(page.color_candidates),
+        page.desktop_screenshot,
+        page.mobile_screenshot,
+    )
     return {"page_research": page, "activities": activities, "mode_used": mode_used}
 
 
 def _brand_node(state: CampaignState) -> CampaignState:
+    logger.info("Workflow step start: brand")
     brief = state["brief"]
     page = state["page_research"]
     fallback = fixture_brand_kit(brief, page)
@@ -152,6 +189,12 @@ def _brand_node(state: CampaignState) -> CampaignState:
     system, user = json_prompt("Brand Analyst Agent", context)
     live = OpenAIModelGateway(state["mode_requested"]).parse(BrandKit, system, user)
     brand = live or fallback
+    logger.info(
+        "Workflow step done: brand brand={} live_used={} primary_colors={}",
+        brand.brand_name,
+        bool(live),
+        brand.primary_colors,
+    )
     activities = _append_activity(
         state,
         "Brand Analyst Agent",
@@ -162,6 +205,7 @@ def _brand_node(state: CampaignState) -> CampaignState:
 
 
 def _strategy_node(state: CampaignState) -> CampaignState:
+    logger.info("Workflow step start: strategy")
     brief = state["brief"]
     brand = state["brand_kit"]
     fallback_options = fixture_strategy_options(brief)
@@ -182,6 +226,12 @@ def _strategy_node(state: CampaignState) -> CampaignState:
         else fallback_options
     )
     selected = choose_strategy(options)
+    logger.info(
+        "Strategy selected angle={} total_score={} live_options_used={}",
+        selected.angle,
+        selected.scorecard.total,
+        bool(live_options),
+    )
 
     decision_context = json.dumps(
         {
@@ -214,6 +264,11 @@ def _strategy_node(state: CampaignState) -> CampaignState:
         "Rejected generic seasonal decoration in favor of brand-consistent holiday cues.",
         "DecisionRecord",
     )
+    logger.info(
+        "Workflow step done: strategy options={} decisions={}",
+        len(options),
+        len(decisions),
+    )
     return {
         "strategy_options": options,
         "selected_strategy": selected,
@@ -223,6 +278,7 @@ def _strategy_node(state: CampaignState) -> CampaignState:
 
 
 def _creative_node(state: CampaignState) -> CampaignState:
+    logger.info("Workflow step start: creative")
     brief = state["brief"]
     selected = state["selected_strategy"]
     fallback_visual = fixture_visual_concept(brief, selected)
@@ -259,6 +315,11 @@ def _creative_node(state: CampaignState) -> CampaignState:
         f"Selected headline '{campaign_copy.headline}' with CTA '{campaign_copy.cta}'.",
         "CampaignCopy",
     )
+    logger.info(
+        "Workflow step done: creative visual={} headline={}",
+        visual.concept_name,
+        campaign_copy.headline,
+    )
     return {
         "visual_concept": visual,
         "campaign_copy": campaign_copy,
@@ -266,12 +327,45 @@ def _creative_node(state: CampaignState) -> CampaignState:
     }
 
 
+def _image_asset_node(state: CampaignState) -> CampaignState:
+    logger.info("Workflow step start: image_asset")
+    asset = build_campaign_image_asset(
+        state["brief"],
+        state["page_research"],
+        state["brand_kit"],
+        state["visual_concept"],
+        state["output_dir"],
+        state["mode_requested"],
+    )
+    message = (
+        "Generated a seasonal hero image from brand references."
+        if asset.generation_mode == "generated"
+        else f"Using {asset.generation_mode.replace('_', ' ')} for hero imagery."
+    )
+    logger.info(
+        "Workflow step done: image_asset mode={} hero={} refs={} fallback={}",
+        asset.generation_mode,
+        asset.hero_image_path,
+        len(asset.reference_image_paths),
+        asset.fallback_reason or "-",
+    )
+    activities = _append_activity(
+        state,
+        "Seasonal Image Director Agent",
+        message,
+        "CampaignImageAsset",
+    )
+    return {"campaign_image_asset": asset, "activities": activities}
+
+
 def _ui_node(state: CampaignState) -> CampaignState:
+    logger.info("Workflow step start: ui")
     html = build_campaign_html(
         state["brief"],
         state["brand_kit"],
         state["visual_concept"],
         state["campaign_copy"],
+        state["campaign_image_asset"],
     )
     activities = _append_activity(
         state,
@@ -279,10 +373,16 @@ def _ui_node(state: CampaignState) -> CampaignState:
         "Generated responsive split-hero HTML with editable text and a visible CTA.",
         "CampaignHtml",
     )
+    logger.info(
+        "Workflow step done: ui html_chars={} layout={}",
+        len(html.html),
+        html.layout,
+    )
     return {"campaign_html": html, "activities": activities}
 
 
 def _render_node(state: CampaignState) -> CampaignState:
+    logger.info("Workflow step start: render")
     html_path, desktop, mobile = render_campaign_html(
         state["campaign_html"].html, state["output_dir"]
     )
@@ -291,6 +391,12 @@ def _render_node(state: CampaignState) -> CampaignState:
         "Browser Renderer Tool",
         "Rendered desktop and mobile campaign screenshots for visual QA.",
         "Screenshots",
+    )
+    logger.info(
+        "Workflow step done: render html={} desktop={} mobile={}",
+        html_path,
+        desktop,
+        mobile,
     )
     return {
         "preview_html_path": html_path,
@@ -301,6 +407,7 @@ def _render_node(state: CampaignState) -> CampaignState:
 
 
 def _qa_node(state: CampaignState) -> CampaignState:
+    logger.info("Workflow step start: qa")
     report = evaluate_campaign(
         state["campaign_html"],
         state.get("desktop_screenshot"),
@@ -314,10 +421,17 @@ def _qa_node(state: CampaignState) -> CampaignState:
         else f"Found {len(report.issues)} issue(s); score {report.overall_score}."
     )
     activities = _append_activity(state, "Visual QA Agent", message, "QaReport")
+    logger.info(
+        "Workflow step done: qa approved={} score={} issues={}",
+        report.approved,
+        report.overall_score,
+        len(report.issues),
+    )
     return {"qa_report": report, "repair_history": history, "activities": activities}
 
 
 def _repair_node(state: CampaignState) -> CampaignState:
+    logger.info("Workflow step start: repair attempt={}", state.get("repair_attempts", 0) + 1)
     notes = [
         issue.recommended_fix
         for issue in state["qa_report"].issues
@@ -328,6 +442,7 @@ def _repair_node(state: CampaignState) -> CampaignState:
         state["brand_kit"],
         state["visual_concept"],
         state["campaign_copy"],
+        state["campaign_image_asset"],
         repair_notes=notes or ["Applied visual QA feedback."],
     )
     attempts = state.get("repair_attempts", 0) + 1
@@ -337,6 +452,7 @@ def _repair_node(state: CampaignState) -> CampaignState:
         "Applied QA repair instructions and regenerated the campaign HTML.",
         "CampaignHtml",
     )
+    logger.info("Workflow step done: repair attempt={} notes={}", attempts, len(notes))
     return {
         "campaign_html": repaired,
         "repair_attempts": attempts,
@@ -345,6 +461,7 @@ def _repair_node(state: CampaignState) -> CampaignState:
 
 
 def _package_node(state: CampaignState) -> CampaignState:
+    logger.info("Workflow step start: package")
     package = CampaignPackage(
         run_id=state["run_id"],
         created_at=datetime.now(UTC),
@@ -356,6 +473,7 @@ def _package_node(state: CampaignState) -> CampaignState:
         selected_strategy=state["selected_strategy"],
         decisions=state["decisions"],
         visual_concept=state["visual_concept"],
+        campaign_image_asset=state["campaign_image_asset"],
         campaign_copy=state["campaign_copy"],
         campaign_html=state["campaign_html"],
         qa_report=state["qa_report"],
@@ -368,12 +486,23 @@ def _package_node(state: CampaignState) -> CampaignState:
     )
     package_path = state["output_dir"] / "campaign_package.json"
     package_path.write_text(package.model_dump_json(indent=2), encoding="utf-8")
+    logger.info("Workflow step done: package path={}", package_path)
     return {"package": package}
 
 
 def _route_after_qa(state: CampaignState) -> Literal["repair", "package"]:
     if should_repair(state["qa_report"], state.get("repair_attempts", 0)):
+        logger.info(
+            "Workflow route: qa -> repair score={} attempts={}",
+            state["qa_report"].overall_score,
+            state.get("repair_attempts", 0),
+        )
         return "repair"
+    logger.info(
+        "Workflow route: qa -> package score={} attempts={}",
+        state["qa_report"].overall_score,
+        state.get("repair_attempts", 0),
+    )
     return "package"
 
 

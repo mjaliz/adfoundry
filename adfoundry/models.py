@@ -26,6 +26,10 @@ class PageImage(BaseModel):
     width: int | None = None
     height: int | None = None
     role: str = "asset"
+    source: str = "html"
+    score: int = 0
+    local_path: str | None = None
+    score_reason: str = ""
 
 
 class PageResearch(BaseModel):
@@ -117,6 +121,19 @@ class VisualConcept(BaseModel):
     constraints: list[str]
 
 
+class CampaignImageAsset(BaseModel):
+    source_image_urls: list[str] = Field(default_factory=list)
+    downloaded_image_paths: list[str] = Field(default_factory=list)
+    reference_image_paths: list[str] = Field(default_factory=list)
+    generation_prompt: str
+    generated_image_path: str | None = None
+    hero_image_path: str | None = None
+    generation_mode: Literal["generated", "source_fallback", "fixture_fallback"]
+    fallback_reason: str | None = None
+    revised_prompt: str | None = None
+    selected_images: list[PageImage] = Field(default_factory=list)
+
+
 class CampaignHtml(BaseModel):
     html: str
     css_summary: str
@@ -160,6 +177,7 @@ class CampaignPackage(BaseModel):
     selected_strategy: StrategyOption
     decisions: list[DecisionRecord]
     visual_concept: VisualConcept
+    campaign_image_asset: CampaignImageAsset
     campaign_copy: CampaignCopy
     campaign_html: CampaignHtml
     qa_report: QaReport

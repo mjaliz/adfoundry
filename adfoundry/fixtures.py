@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+from pathlib import Path
+
+from adfoundry.image_assets import image_to_data_url
 from adfoundry.models import (
     BrandKit,
     CampaignBrief,
     CampaignCopy,
     CampaignHtml,
+    CampaignImageAsset,
     ConfidenceScores,
     DecisionRecord,
     PageImage,
@@ -202,6 +206,7 @@ def build_campaign_html(
     brand_kit: BrandKit,
     visual: VisualConcept,
     copy: CampaignCopy,
+    campaign_image_asset: CampaignImageAsset | None = None,
     repair_notes: list[str] | None = None,
 ) -> CampaignHtml:
     repair_notes = repair_notes or []
@@ -209,6 +214,7 @@ def build_campaign_html(
     light = brand_kit.primary_colors[1]
     accent = brand_kit.accent_colors[0]
     extra_class = " repaired" if repair_notes else ""
+    hero_image_url = _hero_image_url(campaign_image_asset)
     html = f"""<!doctype html>
 <html lang="en">
 <head>
@@ -276,34 +282,31 @@ def build_campaign_html(
     .visual {{
       position: relative;
       min-height: 560px;
-      display: grid;
-      place-items: center;
+      overflow: hidden;
+      background: #202020;
       isolation: isolate;
     }}
-    .visual::before {{
+    .visual::after {{
       content: "";
       position: absolute;
-      inset: 7% 9% 11% 4%;
+      inset: 0;
       background:
-        radial-gradient(circle at 50% 44%, rgba(255,255,255,0.20), transparent 10rem),
-        linear-gradient(145deg, #2f2f2f, #0f0f0f);
-      transform: skew(-10deg) rotate(-5deg);
-      border: 1px solid rgba(255,255,255,0.14);
-      box-shadow: 0 32px 90px rgba(0,0,0,0.45);
-      z-index: -1;
+        linear-gradient(90deg, rgba(17,17,17,0.82) 0%, rgba(17,17,17,0.18) 46%, rgba(17,17,17,0.56) 100%),
+        radial-gradient(circle at 76% 20%, rgba(200,155,60,0.38), transparent 28rem);
+      z-index: 1;
     }}
-    .product {{
-      width: min(72%, 520px);
-      aspect-ratio: 1.62;
-      border-radius: 48% 52% 46% 54%;
-      background:
-        radial-gradient(circle at 58% 38%, rgba(255,255,255,0.96), rgba(255,255,255,0.24) 30%, transparent 31%),
-        linear-gradient(130deg, #f2f2f2 0%, #bcbcbc 24%, #222222 62%, #050505 100%);
-      transform: rotate(-14deg);
-      filter: drop-shadow(0 44px 46px rgba(0,0,0,0.48));
+    .hero-img {{
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      object-position: center;
+      transform: scale(1.02);
     }}
     .caption {{
       position: absolute;
+      z-index: 2;
       right: clamp(24px, 5vw, 70px);
       bottom: clamp(28px, 5vw, 76px);
       padding: 10px 13px;
@@ -345,11 +348,10 @@ def build_campaign_html(
         min-height: 300px;
         order: -1;
       }}
-      .visual::before {{
-        inset: 12% 8% 14%;
-      }}
-      .product {{
-        width: min(74%, 360px);
+      .visual::after {{
+        background:
+          linear-gradient(180deg, rgba(17,17,17,0.20) 0%, rgba(17,17,17,0.72) 100%),
+          radial-gradient(circle at 70% 18%, rgba(200,155,60,0.32), transparent 18rem);
       }}
       .caption {{
         right: 22px;
@@ -367,7 +369,7 @@ def build_campaign_html(
       <a class="cta" href="{brief.url}">{copy.cta}</a>
     </section>
     <section class="visual" aria-label="{visual.concept_name}">
-      <div class="product" role="img" aria-label="{visual.image_direction}"></div>
+      <img class="hero-img" src="{hero_image_url}" alt="{visual.image_direction}">
       <div class="caption">{brief.theme} edit</div>
     </section>
   </main>
@@ -380,6 +382,18 @@ def build_campaign_html(
         layout="Responsive split landing hero",
         repair_notes=repair_notes,
     )
+
+
+def _hero_image_url(campaign_image_asset: CampaignImageAsset | None) -> str:
+    if not campaign_image_asset or not campaign_image_asset.hero_image_path:
+        return ""
+    path = campaign_image_asset.hero_image_path
+    if path.startswith(("http://", "https://", "data:")):
+        return path
+    local_path = Path(path.removeprefix("file://"))
+    if local_path.exists():
+        return image_to_data_url(local_path)
+    return path
 
 
 def fixture_initial_qa() -> QaReport:

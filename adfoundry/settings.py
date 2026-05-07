@@ -16,6 +16,7 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
+        populate_by_name=True,
     )
 
     openai_api_key: str | None = Field(
@@ -29,6 +30,14 @@ class Settings(BaseSettings):
             "OPENAI_MODEL",
             "adfoundry_model",
             "openai_model",
+        ),
+    )
+    openai_image_model: str = Field(
+        default="gpt-image-1.5",
+        validation_alias=AliasChoices(
+            "ADFOUNDRY_IMAGE_MODEL",
+            "OPENAI_IMAGE_MODEL",
+            "openai_image_model",
         ),
     )
     openai_base_url: str | None = Field(
@@ -59,12 +68,50 @@ class Settings(BaseSettings):
         default=12000,
         validation_alias=AliasChoices("ADFOUNDRY_BROWSER_TIMEOUT_MS", "browser_timeout_ms"),
     )
+    browser_headless: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("ADFOUNDRY_BROWSER_HEADLESS", "browser_headless"),
+    )
+    browser_slow_mo_ms: int = Field(
+        default=0,
+        validation_alias=AliasChoices("ADFOUNDRY_BROWSER_SLOW_MO_MS", "browser_slow_mo_ms"),
+    )
     playwright_chromium_executable_path: Path | None = Field(
         default=None,
         validation_alias=AliasChoices(
             "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH",
             "playwright_chromium_executable_path",
         ),
+    )
+    enable_image_generation: bool = Field(
+        default=True,
+        validation_alias=AliasChoices(
+            "ADFOUNDRY_ENABLE_IMAGE_GENERATION",
+            "enable_image_generation",
+        ),
+    )
+    image_size: str = Field(
+        default="1536x1024",
+        validation_alias=AliasChoices("ADFOUNDRY_IMAGE_SIZE", "image_size"),
+    )
+    image_quality: str = Field(
+        default="medium",
+        validation_alias=AliasChoices("ADFOUNDRY_IMAGE_QUALITY", "image_quality"),
+    )
+    image_format: str = Field(
+        default="png",
+        validation_alias=AliasChoices("ADFOUNDRY_IMAGE_FORMAT", "image_format"),
+    )
+    image_max_references: int = Field(
+        default=3,
+        validation_alias=AliasChoices(
+            "ADFOUNDRY_IMAGE_MAX_REFERENCES",
+            "image_max_references",
+        ),
+    )
+    log_level: str = Field(
+        default="INFO",
+        validation_alias=AliasChoices("ADFOUNDRY_LOG_LEVEL", "log_level"),
     )
 
     @field_validator("playwright_chromium_executable_path")
