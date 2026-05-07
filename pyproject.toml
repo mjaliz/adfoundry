@@ -1,0 +1,17 @@
+[project]
+name = "adfoundry"
+version = "0.1.0"
+description = "Agentic campaign builder CEO demo"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "beautifulsoup4>=4.14.3",
+    "langgraph>=1.1.10",
+    "openai>=2.36.0",
+    "pillow>=12.2.0",
+    "playwright>=1.59.0",
+    "pydantic>=2.13.4",
+    "pydantic-settings>=2.14.0",
+    "pytest>=9.0.3",
+    "streamlit>=1.57.0",
+]
