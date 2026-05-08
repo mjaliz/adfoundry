@@ -139,12 +139,17 @@ class CampaignHtml(BaseModel):
     css_summary: str
     layout: str
     repair_notes: list[str] = Field(default_factory=list)
+    generation_mode: Literal["llm", "fixture", "fallback"] = "fixture"
+    attempt: int = 0
+    rationale: str = ""
 
 
 class QaIssue(BaseModel):
     severity: Literal["low", "medium", "high"]
     problem: str
     recommended_fix: str
+    suspected_cause: str = ""
+    regeneration_instruction: str = ""
 
 
 class QaReport(BaseModel):
@@ -158,6 +163,55 @@ class QaReport(BaseModel):
     accessibility: int = Field(ge=0, le=10)
     issues: list[QaIssue] = Field(default_factory=list)
     summary: str
+
+
+class ElementBox(BaseModel):
+    x: float = 0.0
+    y: float = 0.0
+    width: float = 0.0
+    height: float = 0.0
+    top: float = 0.0
+    right: float = 0.0
+    bottom: float = 0.0
+    left: float = 0.0
+
+
+class ViewportRenderDiagnostics(BaseModel):
+    viewport: dict[str, int] = Field(default_factory=dict)
+    screenshot_path: str | None = None
+    hero_box: ElementBox | None = None
+    copy_box: ElementBox | None = None
+    image_box: ElementBox | None = None
+    heading_box: ElementBox | None = None
+    cta_box: ElementBox | None = None
+    natural_image_width: int | None = None
+    natural_image_height: int | None = None
+    object_fit: str = ""
+    object_position: str = ""
+    image_visible_width_ratio: float | None = None
+    image_visible_height_ratio: float | None = None
+    image_crop_risk: bool = False
+    horizontal_overflow: float = 0.0
+    vertical_overflow: float = 0.0
+    cta_above_fold: bool = True
+    text_overflows: list[str] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
+
+
+class RenderDiagnostics(BaseModel):
+    html_path: str
+    desktop_screenshot: str
+    mobile_screenshot: str
+    desktop: ViewportRenderDiagnostics
+    mobile: ViewportRenderDiagnostics
+    error: str | None = None
+
+
+class HtmlAttempt(BaseModel):
+    attempt: int
+    campaign_html: CampaignHtml
+    render_diagnostics: RenderDiagnostics | None = None
+    qa_report: QaReport | None = None
 
 
 class AgentActivity(BaseModel):
@@ -182,6 +236,8 @@ class CampaignPackage(BaseModel):
     campaign_html: CampaignHtml
     qa_report: QaReport
     repair_history: list[QaReport] = Field(default_factory=list)
+    html_attempts: list[HtmlAttempt] = Field(default_factory=list)
+    render_diagnostics: RenderDiagnostics | None = None
     activities: list[AgentActivity] = Field(default_factory=list)
     output_dir: str
     preview_html_path: str

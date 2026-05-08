@@ -23,6 +23,9 @@ def test_settings_loads_openai_base_url_from_env_file(tmp_path: Path) -> None:
                 "ADFOUNDRY_IMAGE_QUALITY=low",
                 "ADFOUNDRY_IMAGE_FORMAT=webp",
                 "ADFOUNDRY_IMAGE_MAX_REFERENCES=2",
+                "ADFOUNDRY_HTML_MAX_ATTEMPTS=4",
+                "ADFOUNDRY_HTML_MIN_SCORE=90",
+                "ADFOUNDRY_HTML_REQUIRE_LIVE_QA=true",
                 "ADFOUNDRY_LOG_LEVEL=DEBUG",
             ]
         ),
@@ -46,6 +49,9 @@ def test_settings_loads_openai_base_url_from_env_file(tmp_path: Path) -> None:
     assert settings.image_quality == "low"
     assert settings.image_format == "webp"
     assert settings.image_max_references == 2
+    assert settings.html_max_attempts == 4
+    assert settings.html_min_score == 90
+    assert settings.html_require_live_qa is True
     assert settings.log_level == "DEBUG"
 
 

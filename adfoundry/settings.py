@@ -109,6 +109,21 @@ class Settings(BaseSettings):
             "image_max_references",
         ),
     )
+    html_max_attempts: int = Field(
+        default=3,
+        validation_alias=AliasChoices("ADFOUNDRY_HTML_MAX_ATTEMPTS", "html_max_attempts"),
+    )
+    html_min_score: int = Field(
+        default=85,
+        validation_alias=AliasChoices("ADFOUNDRY_HTML_MIN_SCORE", "html_min_score"),
+    )
+    html_require_live_qa: bool = Field(
+        default=False,
+        validation_alias=AliasChoices(
+            "ADFOUNDRY_HTML_REQUIRE_LIVE_QA",
+            "html_require_live_qa",
+        ),
+    )
     log_level: str = Field(
         default="INFO",
         validation_alias=AliasChoices("ADFOUNDRY_LOG_LEVEL", "log_level"),

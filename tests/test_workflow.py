@@ -26,6 +26,8 @@ def test_fixture_campaign_generates_package(tmp_path: Path) -> None:
     assert len(package.activities) >= 8
     assert Path(package.preview_html_path).exists()
     assert Path(package.output_dir, "campaign_package.json").exists()
+    assert len(package.html_attempts) == 2
+    assert package.render_diagnostics is not None
 
 
 def test_campaign_records_decisions_and_repair_history(tmp_path: Path) -> None:
@@ -38,6 +40,8 @@ def test_campaign_records_decisions_and_repair_history(tmp_path: Path) -> None:
     assert len(package.repair_history) == 2
     assert package.repair_history[0].approved is False
     assert package.repair_history[-1].approved is True
+    assert package.html_attempts[0].qa_report is not None
+    assert package.html_attempts[-1].campaign_html.repair_notes
 
 
 def test_campaign_html_embeds_local_hero_image(tmp_path: Path) -> None:

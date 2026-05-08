@@ -21,7 +21,6 @@ from pydantic import BaseModel
 
 from adfoundry.browser import render_campaign_html, research_page
 from adfoundry.fixtures import (
-    build_campaign_html,
     choose_strategy,
     fixture_brand_kit,
     fixture_copy,
@@ -29,6 +28,7 @@ from adfoundry.fixtures import (
     fixture_strategy_options,
     fixture_visual_concept,
 )
+from adfoundry.html_generation import generate_campaign_html
 from adfoundry.image_assets import build_campaign_image_asset
 from adfoundry.logging_config import configure_logging
 from adfoundry.llm import OpenAIModelGateway, json_prompt
@@ -41,8 +41,10 @@ from adfoundry.models import (
     CampaignImageAsset,
     CampaignPackage,
     DecisionRecord,
+    HtmlAttempt,
     PageResearch,
     QaReport,
+    RenderDiagnostics,
     RunMode,
     StrategyOption,
     VisualConcept,
@@ -69,10 +71,12 @@ class CampaignState(TypedDict, total=False):
     campaign_html: CampaignHtml
     qa_report: QaReport
     repair_history: list[QaReport]
+    html_attempts: list[HtmlAttempt]
     activities: list[AgentActivity]
     preview_html_path: str
     desktop_screenshot: str
     mobile_screenshot: str
+    render_diagnostics: RenderDiagnostics
     repair_attempts: int
     package: CampaignPackage
 
@@ -116,6 +120,7 @@ def run_campaign(
         "output_dir": output_dir,
         "brief": normalized_brief,
         "repair_history": [],
+        "html_attempts": [],
         "activities": [],
         "repair_attempts": 0,
     }
@@ -131,10 +136,9 @@ def build_graph():
     builder.add_node("strategy", _strategy_node)
     builder.add_node("creative", _creative_node)
     builder.add_node("image_asset", _image_asset_node)
-    builder.add_node("ui", _ui_node)
+    builder.add_node("html_generate", _html_generate_node)
     builder.add_node("render", _render_node)
-    builder.add_node("qa", _qa_node)
-    builder.add_node("repair", _repair_node)
+    builder.add_node("visual_qa", _visual_qa_node)
     builder.add_node("package", _package_node)
 
     builder.add_edge(START, "research")
@@ -142,15 +146,14 @@ def build_graph():
     builder.add_edge("brand", "strategy")
     builder.add_edge("strategy", "creative")
     builder.add_edge("creative", "image_asset")
-    builder.add_edge("image_asset", "ui")
-    builder.add_edge("ui", "render")
-    builder.add_edge("render", "qa")
+    builder.add_edge("image_asset", "html_generate")
+    builder.add_edge("html_generate", "render")
+    builder.add_edge("render", "visual_qa")
     builder.add_conditional_edges(
-        "qa",
-        _route_after_qa,
-        {"repair": "repair", "package": "package"},
+        "visual_qa",
+        _route_after_visual_qa,
+        {"html_generate": "html_generate", "package": "package"},
     )
-    builder.add_edge("repair", "render")
     builder.add_edge("package", END)
     return builder.compile()
 
@@ -436,23 +439,36 @@ def _image_asset_node(state: CampaignState) -> CampaignState:
     return {"campaign_image_asset": asset, "activities": activities}
 
 
-def _ui_node(state: CampaignState) -> CampaignState:
-    logger.info("Workflow step start: ui")
-    html = build_campaign_html(
+def _html_generate_node(state: CampaignState) -> CampaignState:
+    attempt = len(state.get("html_attempts", []))
+    logger.info("Workflow step start: html_generate attempt={}", attempt)
+    html = generate_campaign_html(
         state["brief"],
+        state["page_research"],
         state["brand_kit"],
+        state["selected_strategy"],
         state["visual_concept"],
         state["campaign_copy"],
         state["campaign_image_asset"],
+        state["output_dir"],
+        state["mode_requested"],
+        state.get("html_attempts", []),
+    )
+    message = (
+        "Generated a new standalone campaign HTML composition."
+        if attempt == 0
+        else "Regenerated the full campaign HTML from visual QA feedback."
     )
     activities = _append_activity(
         state,
-        "UI Expert Agent",
-        "Generated responsive split-hero HTML with editable text and a visible CTA.",
+        "HTML Generator Agent",
+        message,
         "CampaignHtml",
     )
     logger.info(
-        "Workflow step done: ui html_chars={} layout={}",
+        "Workflow step done: html_generate attempt={} mode={} html_chars={} layout={}",
+        attempt,
+        html.generation_mode,
         len(html.html),
         html.layout,
     )
@@ -461,38 +477,55 @@ def _ui_node(state: CampaignState) -> CampaignState:
 
 def _render_node(state: CampaignState) -> CampaignState:
     logger.info("Workflow step start: render")
-    html_path, desktop, mobile = render_campaign_html(
-        state["campaign_html"].html, state["output_dir"]
+    diagnostics = render_campaign_html(
+        state["campaign_html"].html,
+        state["output_dir"],
+        attempt=state["campaign_html"].attempt,
     )
     activities = _append_activity(
         state,
         "Browser Renderer Tool",
-        "Rendered desktop and mobile campaign screenshots for visual QA.",
-        "Screenshots",
+        "Rendered desktop and mobile screenshots and collected DOM layout diagnostics.",
+        "RenderDiagnostics",
     )
     logger.info(
-        "Workflow step done: render html={} desktop={} mobile={}",
-        html_path,
-        desktop,
-        mobile,
+        "Workflow step done: render html={} desktop={} mobile={} error={}",
+        diagnostics.html_path,
+        diagnostics.desktop_screenshot,
+        diagnostics.mobile_screenshot,
+        diagnostics.error or "-",
     )
     return {
-        "preview_html_path": html_path,
-        "desktop_screenshot": desktop,
-        "mobile_screenshot": mobile,
+        "preview_html_path": diagnostics.html_path,
+        "desktop_screenshot": diagnostics.desktop_screenshot,
+        "mobile_screenshot": diagnostics.mobile_screenshot,
+        "render_diagnostics": diagnostics,
         "activities": activities,
     }
 
 
-def _qa_node(state: CampaignState) -> CampaignState:
-    logger.info("Workflow step start: qa")
+def _visual_qa_node(state: CampaignState) -> CampaignState:
+    logger.info("Workflow step start: visual_qa")
+    settings = get_settings()
     report = evaluate_campaign(
         state["campaign_html"],
         state.get("desktop_screenshot"),
         state.get("mobile_screenshot"),
-        state.get("repair_attempts", 0),
+        state["campaign_html"].attempt,
+        diagnostics=state.get("render_diagnostics"),
+        min_score=settings.html_min_score,
     )
+    report = _merge_live_visual_qa_if_required(state, report)
     history = [*state.get("repair_history", []), report]
+    attempts = [
+        *state.get("html_attempts", []),
+        HtmlAttempt(
+            attempt=state["campaign_html"].attempt,
+            campaign_html=state["campaign_html"],
+            render_diagnostics=state.get("render_diagnostics"),
+            qa_report=report,
+        ),
+    ]
     message = (
         f"Approved campaign with score {report.overall_score}."
         if report.approved
@@ -500,40 +533,16 @@ def _qa_node(state: CampaignState) -> CampaignState:
     )
     activities = _append_activity(state, "Visual QA Agent", message, "QaReport")
     logger.info(
-        "Workflow step done: qa approved={} score={} issues={}",
+        "Workflow step done: visual_qa approved={} score={} issues={}",
         report.approved,
         report.overall_score,
         len(report.issues),
     )
-    return {"qa_report": report, "repair_history": history, "activities": activities}
-
-
-def _repair_node(state: CampaignState) -> CampaignState:
-    logger.info("Workflow step start: repair attempt={}", state.get("repair_attempts", 0) + 1)
-    notes = [
-        issue.recommended_fix
-        for issue in state["qa_report"].issues
-        if issue.severity in {"high", "medium"}
-    ]
-    repaired = build_campaign_html(
-        state["brief"],
-        state["brand_kit"],
-        state["visual_concept"],
-        state["campaign_copy"],
-        state["campaign_image_asset"],
-        repair_notes=notes or ["Applied visual QA feedback."],
-    )
-    attempts = state.get("repair_attempts", 0) + 1
-    activities = _append_activity(
-        state,
-        "UI Expert Agent",
-        "Applied QA repair instructions and regenerated the campaign HTML.",
-        "CampaignHtml",
-    )
-    logger.info("Workflow step done: repair attempt={} notes={}", attempts, len(notes))
     return {
-        "campaign_html": repaired,
-        "repair_attempts": attempts,
+        "qa_report": report,
+        "repair_history": history,
+        "html_attempts": attempts,
+        "repair_attempts": state["campaign_html"].attempt,
         "activities": activities,
     }
 
@@ -556,6 +565,8 @@ def _package_node(state: CampaignState) -> CampaignState:
         campaign_html=state["campaign_html"],
         qa_report=state["qa_report"],
         repair_history=state.get("repair_history", []),
+        html_attempts=state.get("html_attempts", []),
+        render_diagnostics=state.get("render_diagnostics"),
         activities=state.get("activities", []),
         output_dir=str(state["output_dir"]),
         preview_html_path=state["preview_html_path"],
@@ -568,20 +579,72 @@ def _package_node(state: CampaignState) -> CampaignState:
     return {"package": package}
 
 
-def _route_after_qa(state: CampaignState) -> Literal["repair", "package"]:
-    if should_repair(state["qa_report"], state.get("repair_attempts", 0)):
+def _route_after_visual_qa(state: CampaignState) -> Literal["html_generate", "package"]:
+    settings = get_settings()
+    max_repairs = max(0, settings.html_max_attempts - 1)
+    attempt = state["campaign_html"].attempt
+    if should_repair(
+        state["qa_report"],
+        attempt,
+        max_attempts=max_repairs,
+        min_score=settings.html_min_score,
+    ):
         logger.info(
-            "Workflow route: qa -> repair score={} attempts={}",
+            "Workflow route: visual_qa -> html_generate score={} attempt={} max_attempts={}",
             state["qa_report"].overall_score,
-            state.get("repair_attempts", 0),
+            attempt,
+            settings.html_max_attempts,
         )
-        return "repair"
+        return "html_generate"
     logger.info(
-        "Workflow route: qa -> package score={} attempts={}",
+        "Workflow route: visual_qa -> package score={} attempt={} max_attempts={}",
         state["qa_report"].overall_score,
-        state.get("repair_attempts", 0),
+        attempt,
+        settings.html_max_attempts,
     )
     return "package"
+
+
+def _merge_live_visual_qa_if_required(
+    state: CampaignState,
+    deterministic_report: QaReport,
+) -> QaReport:
+    settings = get_settings()
+    if (
+        not settings.html_require_live_qa
+        or state["mode_requested"] == "fixture"
+        or deterministic_report.issues
+    ):
+        return deterministic_report
+
+    context = json.dumps(
+        {
+            "brief": state["brief"].model_dump(),
+            "campaign_html": {
+                "layout": state["campaign_html"].layout,
+                "css_summary": state["campaign_html"].css_summary,
+                "rationale": state["campaign_html"].rationale,
+            },
+            "render_diagnostics": (
+                state["render_diagnostics"].model_dump()
+                if state.get("render_diagnostics")
+                else None
+            ),
+            "screenshots": {
+                "desktop": state.get("desktop_screenshot"),
+                "mobile": state.get("mobile_screenshot"),
+            },
+            "deterministic_report": deterministic_report.model_dump(),
+        },
+        indent=2,
+    )
+    system, user = json_prompt("Visual QA Agent", context)
+    live = OpenAIModelGateway(state["mode_requested"]).parse(QaReport, system, user)
+    if not live:
+        return deterministic_report
+    if live.issues or not live.approved:
+        return live
+    return deterministic_report
 
 
 def _append_activity(

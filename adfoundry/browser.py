@@ -7,7 +7,16 @@ from PIL import Image, ImageDraw
 
 from adfoundry.fixtures import fixture_page_research
 from adfoundry.image_assets import dedupe_and_score_images, extract_image_candidates_from_html
-from adfoundry.models import CampaignBrief, PageImage, PageResearch, RunMode, normalize_url
+from adfoundry.models import (
+    CampaignBrief,
+    ElementBox,
+    PageImage,
+    PageResearch,
+    RenderDiagnostics,
+    RunMode,
+    ViewportRenderDiagnostics,
+    normalize_url,
+)
 from adfoundry.settings import Settings, get_settings
 
 
@@ -190,10 +199,24 @@ def write_campaign_html(html: str, output_dir: Path) -> Path:
     return path
 
 
-def render_campaign_html(html: str, output_dir: Path) -> tuple[str, str, str]:
+def render_campaign_html(
+    html: str,
+    output_dir: Path,
+    attempt: int | None = None,
+) -> RenderDiagnostics:
     html_path = write_campaign_html(html, output_dir)
-    desktop_path = output_dir / "campaign_desktop.png"
-    mobile_path = output_dir / "campaign_mobile.png"
+    suffix = f"_attempt_{attempt}" if attempt is not None else ""
+    desktop_path = output_dir / f"campaign_desktop{suffix}.png"
+    mobile_path = output_dir / f"campaign_mobile{suffix}.png"
+    desktop_diagnostics = ViewportRenderDiagnostics(
+        viewport=DESKTOP_VIEWPORT,
+        screenshot_path=str(desktop_path),
+    )
+    mobile_diagnostics = ViewportRenderDiagnostics(
+        viewport=MOBILE_VIEWPORT,
+        screenshot_path=str(mobile_path),
+    )
+    error: str | None = None
 
     try:
         from playwright.sync_api import sync_playwright
@@ -204,16 +227,158 @@ def render_campaign_html(html: str, output_dir: Path) -> tuple[str, str, str]:
             desktop = browser.new_page(viewport=DESKTOP_VIEWPORT)
             desktop.goto(html_path.resolve().as_uri(), wait_until="networkidle")
             desktop.screenshot(path=str(desktop_path), full_page=False)
+            desktop_diagnostics = _collect_render_diagnostics(
+                desktop, DESKTOP_VIEWPORT, str(desktop_path)
+            )
 
             mobile = browser.new_page(viewport=MOBILE_VIEWPORT, is_mobile=True)
             mobile.goto(html_path.resolve().as_uri(), wait_until="networkidle")
             mobile.screenshot(path=str(mobile_path), full_page=False)
+            mobile_diagnostics = _collect_render_diagnostics(
+                mobile, MOBILE_VIEWPORT, str(mobile_path)
+            )
             browser.close()
     except Exception as exc:
+        error = str(exc)
         _placeholder_screenshot(desktop_path, "Desktop preview fallback", str(exc), (1440, 960))
         _placeholder_screenshot(mobile_path, "Mobile preview fallback", str(exc), (390, 844))
+        desktop_diagnostics.notes.append(f"Render fallback: {exc}")
+        mobile_diagnostics.notes.append(f"Render fallback: {exc}")
 
-    return str(html_path), str(desktop_path), str(mobile_path)
+    return RenderDiagnostics(
+        html_path=str(html_path),
+        desktop_screenshot=str(desktop_path),
+        mobile_screenshot=str(mobile_path),
+        desktop=desktop_diagnostics,
+        mobile=mobile_diagnostics,
+        error=error,
+    )
+
+
+def _collect_render_diagnostics(
+    page,
+    viewport: dict[str, int],
+    screenshot_path: str,
+) -> ViewportRenderDiagnostics:
+    raw = page.evaluate(
+        """
+        () => {
+          const box = (el) => {
+            if (!el) return null;
+            const rect = el.getBoundingClientRect();
+            return {
+              x: rect.x, y: rect.y, width: rect.width, height: rect.height,
+              top: rect.top, right: rect.right, bottom: rect.bottom, left: rect.left
+            };
+          };
+          const hero = document.querySelector('main, .hero, [role="main"]') || document.body;
+          const copy = document.querySelector('.copy, [data-role="copy"], section') || null;
+          const image = document.querySelector('.hero-img, main img, img') || null;
+          const heading = document.querySelector('h1') || null;
+          const cta = document.querySelector('a[href], button, [role="button"]') || null;
+          const style = image ? getComputedStyle(image) : null;
+          const textOverflows = Array.from(document.querySelectorAll('h1, h2, p, a, button'))
+            .filter((el) => el.scrollWidth > el.clientWidth + 2 || el.scrollHeight > el.clientHeight + 2)
+            .map((el) => `${el.tagName.toLowerCase()}: ${el.textContent.trim().slice(0, 80)}`);
+          return {
+            viewport: { width: window.innerWidth, height: window.innerHeight },
+            heroBox: box(hero),
+            copyBox: box(copy),
+            imageBox: box(image),
+            headingBox: box(heading),
+            ctaBox: box(cta),
+            naturalImageWidth: image ? image.naturalWidth || null : null,
+            naturalImageHeight: image ? image.naturalHeight || null : null,
+            objectFit: style ? style.objectFit : "",
+            objectPosition: style ? style.objectPosition : "",
+            horizontalOverflow: Math.max(0, document.documentElement.scrollWidth - window.innerWidth),
+            verticalOverflow: Math.max(0, document.documentElement.scrollHeight - window.innerHeight),
+            ctaAboveFold: cta ? cta.getBoundingClientRect().bottom <= window.innerHeight : false,
+            textOverflows
+          };
+        }
+        """
+    )
+    image_box = _box_from_raw(raw.get("imageBox"))
+    fit = _image_fit_metrics(
+        raw.get("naturalImageWidth"),
+        raw.get("naturalImageHeight"),
+        image_box.width if image_box else None,
+        image_box.height if image_box else None,
+        raw.get("objectFit") or "",
+    )
+    return ViewportRenderDiagnostics(
+        viewport=raw.get("viewport") or viewport,
+        screenshot_path=screenshot_path,
+        hero_box=_box_from_raw(raw.get("heroBox")),
+        copy_box=_box_from_raw(raw.get("copyBox")),
+        image_box=image_box,
+        heading_box=_box_from_raw(raw.get("headingBox")),
+        cta_box=_box_from_raw(raw.get("ctaBox")),
+        natural_image_width=_safe_int(raw.get("naturalImageWidth")),
+        natural_image_height=_safe_int(raw.get("naturalImageHeight")),
+        object_fit=raw.get("objectFit") or "",
+        object_position=raw.get("objectPosition") or "",
+        image_visible_width_ratio=fit["visible_width_ratio"],
+        image_visible_height_ratio=fit["visible_height_ratio"],
+        image_crop_risk=fit["crop_risk"],
+        horizontal_overflow=float(raw.get("horizontalOverflow") or 0),
+        vertical_overflow=float(raw.get("verticalOverflow") or 0),
+        cta_above_fold=bool(raw.get("ctaAboveFold")),
+        text_overflows=list(raw.get("textOverflows") or []),
+    )
+
+
+def _box_from_raw(raw: dict[str, object] | None) -> ElementBox | None:
+    if not raw:
+        return None
+    return ElementBox(**{key: float(raw.get(key) or 0) for key in ElementBox.model_fields})
+
+
+def _image_fit_metrics(
+    natural_width: int | str | None,
+    natural_height: int | str | None,
+    box_width: float | None,
+    box_height: float | None,
+    object_fit: str,
+) -> dict[str, float | bool | None]:
+    try:
+        natural_w = float(natural_width or 0)
+        natural_h = float(natural_height or 0)
+        rendered_w = float(box_width or 0)
+        rendered_h = float(box_height or 0)
+    except (TypeError, ValueError):
+        natural_w = natural_h = rendered_w = rendered_h = 0
+
+    if min(natural_w, natural_h, rendered_w, rendered_h) <= 0:
+        return {
+            "visible_width_ratio": None,
+            "visible_height_ratio": None,
+            "crop_risk": False,
+        }
+
+    fit = object_fit.strip().lower()
+    if fit in {"contain", "scale-down"}:
+        return {
+            "visible_width_ratio": 1.0,
+            "visible_height_ratio": 1.0,
+            "crop_risk": False,
+        }
+
+    if fit == "cover":
+        scale = max(rendered_w / natural_w, rendered_h / natural_h)
+        visible_w = min(1.0, rendered_w / scale / natural_w)
+        visible_h = min(1.0, rendered_h / scale / natural_h)
+    else:
+        visible_w = min(1.0, rendered_w / natural_w)
+        visible_h = min(1.0, rendered_h / natural_h)
+
+    crop_risk = visible_w < 0.55 or visible_h < 0.65
+    return {
+        "visible_width_ratio": round(visible_w, 3),
+        "visible_height_ratio": round(visible_h, 3),
+        "crop_risk": crop_risk,
+    }
 
 
 def _chromium_launch_options(settings: Settings) -> dict[str, object]:

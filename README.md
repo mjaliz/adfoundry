@@ -65,6 +65,9 @@ Supported `.env` keys:
 - `ADFOUNDRY_IMAGE_QUALITY`: generated image quality, default `medium`.
 - `ADFOUNDRY_IMAGE_FORMAT`: generated image format, default `png`.
 - `ADFOUNDRY_IMAGE_MAX_REFERENCES`: maximum source images sent as references.
+- `ADFOUNDRY_HTML_MAX_ATTEMPTS`: maximum HTML generation/render/QA attempts, default `3`.
+- `ADFOUNDRY_HTML_MIN_SCORE`: minimum Visual QA score required for approval, default `85`.
+- `ADFOUNDRY_HTML_REQUIRE_LIVE_QA`: require an additional live LLM QA pass when deterministic QA passes.
 
 For AvalAI, use your AvalAI API key and OpenAI-compatible base URL:
 
@@ -126,8 +129,8 @@ AdFoundry should behave like an autonomous creative production team:
 - Campaign Strategist Agent: proposes campaign angles and selects the best strategy for the theme and goal.
 - Creative Director Agent: defines visual concepts, image direction, composition, and mood.
 - Copywriter Agent: writes headlines, subheadlines, CTAs, subject lines, and preheaders.
-- UI Expert Agent: generates responsive HTML/CSS for the campaign.
-- Visual QA Agent: reviews browser screenshots, evaluates quality, and sends repair instructions back to the UI Expert Agent.
+- HTML Generator Agent: generates full standalone responsive HTML/CSS for the campaign.
+- Visual QA Agent: reviews browser screenshots and DOM diagnostics, then sends regeneration instructions back to the HTML Generator Agent.
 
 ## Intended Workflow
 
@@ -147,16 +150,16 @@ Agent strategy debate
 Creative direction and copy generation
         |
         v
-HTML/CSS generation by UI Expert Agent
+HTML/CSS generation by HTML Generator Agent
         |
         v
 Browser render with Playwright
         |
         v
-Screenshot-based visual QA
+Screenshot and DOM-diagnostics visual QA
         |
         v
-Repair loop if needed
+Full HTML regeneration loop if needed
         |
         v
 Final campaign package
