@@ -1,7 +1,7 @@
 [project]
 name = "adfoundry"
 version = "0.1.0"
-description = "Agentic campaign builder CEO demo"
+description = "Agentic campaign builder"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [

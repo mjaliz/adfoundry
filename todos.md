@@ -1,0 +1,3 @@
+1 - imporove prompts
+2 - agentic loop for checking the final design with the logo, theme, buissiness, ...
+3 - slower simulation for showing the work

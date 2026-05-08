@@ -64,6 +64,6 @@ def json_prompt(name: str, context: str) -> tuple[str, str]:
     system = (
         f"You are the {name} in AdFoundry, an agentic campaign builder. "
         "Return only structured output matching the provided schema. "
-        "Make clear, concise decisions suitable for a CEO demo."
+        "Make clear, concise decisions suitable for a polished executive review."
     )
     return system, context

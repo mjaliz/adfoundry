@@ -284,9 +284,9 @@ def build_image_generation_prompt(
     )
     return (
         f"Edit/generate a premium landscape campaign hero image for {brand.brand_name}. "
-        f"Theme: {brief.theme}. Goal: {brief.goal}. Tone: {brief.tone}. "
+        f"Campaign occasion: {brief.theme}. Goal: {brief.goal}. Tone: {brief.tone}. "
         f"Brand style: {brand.visual_style}. Creative direction: {image_direction}. "
-        f"{reference_note} Add restrained {brief.theme} cues that fit the brand. "
+        f"{reference_note} Use the occasion as a subtle visual influence, not a literal motif repeated across the image. "
         "Do not include headline text, CTA text, fake discounts, fake endorsements, watermarks, or logos not present in the references. "
         "Leave negative space for editable HTML copy and a CTA overlay."
     )
@@ -493,8 +493,8 @@ def create_fixture_hero_image(output_dir: Path, brief: CampaignBrief, brand: Bra
     draw.ellipse((820, 120, 1480, 790), fill="#242424", outline=accent, width=8)
     draw.polygon([(720, 650), (1320, 450), (1410, 560), (820, 790)], fill="#eeeeee")
     draw.polygon([(760, 650), (1220, 505), (1260, 555), (820, 710)], fill="#6b6b6b")
-    draw.text((70, 70), f"{brand.brand_name} {brief.theme} image fallback", fill="#ffffff")
-    draw.text((70, 112), "Fixture image used when no usable source/generated image is available.", fill=accent)
+    draw.text((70, 70), f"{brand.brand_name} campaign visual", fill="#ffffff")
+    draw.text((70, 112), "Curated brand-safe hero composition.", fill=accent)
     path.parent.mkdir(parents=True, exist_ok=True)
     image.save(path)
     return path

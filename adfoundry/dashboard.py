@@ -16,10 +16,17 @@ from adfoundry.workflow import run_campaign
 st.set_page_config(page_title="AdFoundry", page_icon="AF", layout="wide")
 
 
+MODE_LABELS = {
+    "hybrid": "Adaptive",
+    "live": "Live",
+    "fixture": "Reliable",
+}
+
+
 def main() -> None:
     settings = get_settings()
-    st.title("AdFoundry CEO Demo")
-    st.caption("Autonomous creative team for brand-aware landing hero campaigns.")
+    st.title("AdFoundry Campaign Studio")
+    st.caption("Autonomous creative team for brand-aware campaign production.")
 
     with st.sidebar:
         st.header("Campaign Brief")
@@ -31,10 +38,11 @@ def main() -> None:
         offer = st.text_input("Offer", "Holiday gift edit")
         cta = st.text_input("CTA preference", "Shop Gifts")
         mode = st.selectbox(
-            "Runtime mode",
+            "Production mode",
             ["hybrid", "fixture", "live"],
             index=["hybrid", "fixture", "live"].index(settings.default_run_mode),
-            help="Hybrid tries live services and falls back to fixtures.",
+            format_func=lambda value: MODE_LABELS[value],
+            help="Adaptive mode uses live services when available and keeps the run reliable.",
         )
         run = st.button("Build Campaign", type="primary", width="stretch")
 
@@ -52,7 +60,7 @@ def main() -> None:
             with st.spinner("Agents are building, critiquing, and repairing the campaign..."):
                 st.session_state.package = run_campaign(brief, mode=mode)  # type: ignore[arg-type]
         elif "package" not in st.session_state:
-            st.info("Use the sidebar to build the default CEO demo campaign.")
+            st.info("Use the sidebar to build a campaign.")
             return
 
     package = st.session_state.package
@@ -61,7 +69,7 @@ def main() -> None:
     metrics[0].metric("QA score", package.qa_report.overall_score)
     metrics[1].metric("Agent events", len(package.activities))
     metrics[2].metric("Repair rounds", max(0, len(package.repair_history) - 1))
-    metrics[3].metric("Mode used", package.mode_used)
+    metrics[3].metric("Mode", MODE_LABELS.get(package.mode_used, package.mode_used.title()))
 
     tab_room, tab_decisions, tab_preview, tab_export = st.tabs(
         ["Agent Room", "Decision Board", "Preview & QA", "Export"]
@@ -106,17 +114,17 @@ def main() -> None:
             "Campaign drafts may use public brand references. Confirm usage rights before production."
         )
         asset_cols = st.columns(3)
-        asset_cols[0].metric("Image mode", image_asset.generation_mode)
+        asset_cols[0].metric("Image path", _image_mode_label(image_asset.generation_mode))
         asset_cols[1].metric("References", len(image_asset.reference_image_paths))
         asset_cols[2].metric("Candidates", len(package.page_research.image_assets))
         if image_asset.fallback_reason:
-            st.info(image_asset.fallback_reason)
+            st.info(_image_status_message(image_asset.fallback_reason))
         if image_asset.hero_image_path:
             st.image(image_asset.hero_image_path, caption="Selected campaign hero image", width="stretch")
         with st.expander("Seasonal image prompt"):
             st.write(image_asset.generation_prompt)
             if image_asset.revised_prompt:
-                st.caption("OpenAI revised prompt")
+                st.caption("Final image prompt")
                 st.write(image_asset.revised_prompt)
         with st.expander("Extracted image candidates"):
             rows = [
@@ -179,6 +187,27 @@ def main() -> None:
             file_name="index.html",
             mime="text/html",
         )
+
+
+def _image_mode_label(mode: str) -> str:
+    return {
+        "generated": "Generated",
+        "source_fallback": "Brand source",
+        "fixture_fallback": "Curated safe visual",
+    }.get(mode, mode.replace("_", " ").title())
+
+
+def _image_status_message(reason: str) -> str:
+    lower = reason.lower()
+    if "disabled" in lower:
+        return "Live image generation is off, so the campaign uses a curated visual."
+    if "api_key" in lower or "not configured" in lower:
+        return "Live image generation is not configured, so the campaign uses a curated visual."
+    if "reference image edit failed" in lower:
+        return "Reference blending was unavailable, so the system generated an original campaign visual."
+    if "fixture mode" in lower:
+        return "Reliable mode uses a curated campaign visual."
+    return "The system selected the most reliable available campaign visual."
 
 
 if __name__ == "__main__":

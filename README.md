@@ -104,7 +104,7 @@ Run the current entrypoint:
 .venv/bin/python3 main.py
 ```
 
-Run the CEO demo dashboard:
+Run the campaign dashboard:
 
 ```bash
 .venv/bin/python3 -m streamlit run adfoundry/dashboard.py
@@ -215,7 +215,7 @@ The first useful version should support:
 9. Run screenshot-based visual QA.
 10. Repair the campaign up to a fixed number of attempts.
 
-The demo should emphasize this loop:
+The product experience should emphasize this loop:
 
 ```text
 Generate -> Inspect -> Critique -> Repair -> Approve

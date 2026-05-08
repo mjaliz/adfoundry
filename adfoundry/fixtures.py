@@ -48,8 +48,8 @@ def fixture_page_research(brief: CampaignBrief) -> PageResearch:
         ],
         source="fixture",
         notes=[
-            "Fixture fallback keeps the CEO demo reliable.",
-            "Use live research when browser/network access is available.",
+            "Curated source evidence keeps the campaign run reliable.",
+            "Use live research when browser and network access are available.",
         ],
     )
 
@@ -213,6 +213,18 @@ def build_campaign_html(
     primary = brand_kit.primary_colors[0]
     light = brand_kit.primary_colors[1]
     accent = brand_kit.accent_colors[0]
+    primary_rgb = _css_rgb(primary, (17, 17, 17))
+    light_rgb = _css_rgb(light, (255, 255, 255))
+    accent_rgb = _css_rgb(accent, (200, 155, 60))
+    primary_deep = _rgb_to_hex(_mix_rgb(primary_rgb, (0, 0, 0), 0.78))
+    primary_mid = _rgb_to_hex(_mix_rgb(primary_rgb, (0, 0, 0), 0.48))
+    primary_haze = _rgba(primary_rgb, 0.36)
+    primary_veil = _rgba(primary_rgb, 0.88)
+    primary_veil_soft = _rgba(primary_rgb, 0.46)
+    primary_shadow = _rgba(primary_rgb, 0.42)
+    light_soft = _rgba(light_rgb, 0.84)
+    accent_glow = _rgba(accent_rgb, 0.38)
+    accent_line = _rgba(accent_rgb, 0.72)
     extra_class = " repaired" if repair_notes else ""
     hero_image_url = _hero_image_url(campaign_image_asset)
     html = f"""<!doctype html>
@@ -223,20 +235,30 @@ def build_campaign_html(
   <title>{brand_kit.brand_name} Campaign Hero</title>
   <style>
     * {{ box-sizing: border-box; }}
+    :root {{
+      --brand-primary: {primary};
+      --brand-contrast: {light};
+      --brand-accent: {accent};
+    }}
     body {{
       margin: 0;
-      background: {primary};
-      color: {light};
+      min-height: 100vh;
+      background:
+        radial-gradient(circle at 12% 16%, {primary_haze}, transparent 34rem),
+        linear-gradient(145deg, {primary_deep} 0%, #050505 54%, {primary_mid} 100%);
+      color: var(--brand-contrast);
       font-family: Inter, Arial, Helvetica, sans-serif;
     }}
     .hero {{
-      min-height: 720px;
+      min-height: max(720px, 100vh);
       display: grid;
       grid-template-columns: minmax(320px, 0.92fr) minmax(360px, 1.08fr);
       overflow: hidden;
       background:
-        radial-gradient(circle at 82% 18%, rgba(200, 155, 60, 0.36), transparent 24rem),
-        linear-gradient(135deg, #050505 0%, #111111 52%, #242424 100%);
+        linear-gradient(90deg, {primary_veil} 0%, {primary_veil_soft} 45%, transparent 72%),
+        radial-gradient(circle at 82% 18%, {accent_glow}, transparent 24rem),
+        radial-gradient(circle at 18% 88%, {primary_haze}, transparent 28rem),
+        linear-gradient(135deg, {primary_deep} 0%, #111111 54%, #242424 100%);
     }}
     .copy {{
       padding: clamp(36px, 7vw, 96px);
@@ -244,6 +266,8 @@ def build_campaign_html(
       flex-direction: column;
       justify-content: center;
       min-width: 0;
+      background:
+        linear-gradient(90deg, {primary_veil} 0%, {primary_veil_soft} 78%, transparent 100%);
     }}
     .brand {{
       font-size: 0.86rem;
@@ -251,6 +275,15 @@ def build_campaign_html(
       letter-spacing: 0;
       text-transform: uppercase;
       margin-bottom: 28px;
+      color: var(--brand-contrast);
+    }}
+    .brand::after {{
+      content: "";
+      display: block;
+      width: 48px;
+      height: 3px;
+      margin-top: 12px;
+      background: linear-gradient(90deg, var(--brand-accent), transparent);
     }}
     h1 {{
       max-width: 680px;
@@ -263,7 +296,7 @@ def build_campaign_html(
     p {{
       max-width: 520px;
       margin: 28px 0 0;
-      color: #eeeeee;
+      color: {light_soft};
       font-size: clamp(1.05rem, 2vw, 1.38rem);
       line-height: 1.45;
     }}
@@ -272,18 +305,18 @@ def build_campaign_html(
       margin-top: 34px;
       padding: 15px 24px;
       border-radius: 999px;
-      border: 0;
-      background: {light};
-      color: {primary};
+      border: 1px solid {accent_line};
+      background: var(--brand-contrast);
+      color: var(--brand-primary);
       font-weight: 800;
       text-decoration: none;
-      box-shadow: 0 16px 42px rgba(0, 0, 0, 0.28);
+      box-shadow: 0 16px 42px {primary_shadow}, 0 0 0 6px {primary_haze};
     }}
     .visual {{
       position: relative;
       min-height: 560px;
       overflow: hidden;
-      background: #202020;
+      background: {primary_deep};
       isolation: isolate;
     }}
     .visual::after {{
@@ -291,8 +324,9 @@ def build_campaign_html(
       position: absolute;
       inset: 0;
       background:
-        linear-gradient(90deg, rgba(17,17,17,0.82) 0%, rgba(17,17,17,0.18) 46%, rgba(17,17,17,0.56) 100%),
-        radial-gradient(circle at 76% 20%, rgba(200,155,60,0.38), transparent 28rem);
+        linear-gradient(90deg, {primary_veil} 0%, rgba(17,17,17,0.14) 46%, {primary_veil_soft} 100%),
+        radial-gradient(circle at 76% 20%, {accent_glow}, transparent 28rem),
+        radial-gradient(circle at 18% 82%, {primary_haze}, transparent 22rem);
       z-index: 1;
     }}
     .hero-img {{
@@ -310,8 +344,10 @@ def build_campaign_html(
       right: clamp(24px, 5vw, 70px);
       bottom: clamp(28px, 5vw, 76px);
       padding: 10px 13px;
-      color: {primary};
-      background: {accent};
+      color: var(--brand-contrast);
+      background: {primary_veil_soft};
+      border: 1px solid {accent_line};
+      backdrop-filter: blur(14px);
       font-size: 0.84rem;
       font-weight: 800;
       text-transform: uppercase;
@@ -324,7 +360,7 @@ def build_campaign_html(
     }}
     @media (max-width: 780px) {{
       .hero {{
-        min-height: 100vh;
+        min-height: 100dvh;
         grid-template-columns: 1fr;
       }}
       .copy {{
@@ -350,8 +386,9 @@ def build_campaign_html(
       }}
       .visual::after {{
         background:
-          linear-gradient(180deg, rgba(17,17,17,0.20) 0%, rgba(17,17,17,0.72) 100%),
-          radial-gradient(circle at 70% 18%, rgba(200,155,60,0.32), transparent 18rem);
+          linear-gradient(180deg, rgba(17,17,17,0.20) 0%, {primary_veil} 100%),
+          radial-gradient(circle at 70% 18%, {accent_glow}, transparent 18rem),
+          radial-gradient(circle at 20% 88%, {primary_haze}, transparent 16rem);
       }}
       .caption {{
         right: 22px;
@@ -370,7 +407,7 @@ def build_campaign_html(
     </section>
     <section class="visual" aria-label="{visual.concept_name}">
       <img class="hero-img" src="{hero_image_url}" alt="{visual.image_direction}">
-      <div class="caption">{brief.theme} edit</div>
+      <div class="caption">{_campaign_caption(brand_kit)}</div>
     </section>
   </main>
 </body>
@@ -378,10 +415,51 @@ def build_campaign_html(
 """
     return CampaignHtml(
         html=html,
-        css_summary="Responsive split hero with black/white brand base and gold seasonal accent.",
+        css_summary="Responsive split hero with integrated brand-color gradients, image wash, CTA treatment, and caption styling.",
         layout="Responsive split landing hero",
         repair_notes=repair_notes,
     )
+
+
+def _campaign_caption(brand_kit: BrandKit) -> str:
+    return f"{brand_kit.brand_name} Select"
+
+
+def _css_rgb(color: str, fallback: tuple[int, int, int]) -> tuple[int, int, int]:
+    value = color.strip()
+    if value.startswith("#"):
+        value = value[1:]
+        if len(value) == 3:
+            value = "".join(channel * 2 for channel in value)
+        if len(value) == 6:
+            try:
+                return (
+                    int(value[0:2], 16),
+                    int(value[2:4], 16),
+                    int(value[4:6], 16),
+                )
+            except ValueError:
+                return fallback
+    return fallback
+
+
+def _mix_rgb(
+    rgb: tuple[int, int, int], target: tuple[int, int, int], target_weight: float
+) -> tuple[int, int, int]:
+    source_weight = 1 - target_weight
+    return tuple(
+        round(channel * source_weight + target_channel * target_weight)
+        for channel, target_channel in zip(rgb, target, strict=True)
+    )
+
+
+def _rgb_to_hex(rgb: tuple[int, int, int]) -> str:
+    return "#{:02x}{:02x}{:02x}".format(*rgb)
+
+
+def _rgba(rgb: tuple[int, int, int], alpha: float) -> str:
+    red, green, blue = rgb
+    return f"rgba({red}, {green}, {blue}, {alpha:.2f})"
 
 
 def _hero_image_url(campaign_image_asset: CampaignImageAsset | None) -> str:

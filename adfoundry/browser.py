@@ -228,8 +228,8 @@ def _chromium_launch_options(settings: Settings) -> dict[str, object]:
 def _write_fixture_page_screenshots(page: PageResearch, output_dir: Path) -> PageResearch:
     desktop = output_dir / "source_desktop.png"
     mobile = output_dir / "source_mobile.png"
-    _placeholder_screenshot(desktop, "Source research fixture", "Nike-style campaign evidence", (1440, 960))
-    _placeholder_screenshot(mobile, "Source research fixture", "Mobile source evidence", (390, 844))
+    _placeholder_screenshot(desktop, "Source research", "Nike-style campaign evidence", (1440, 960))
+    _placeholder_screenshot(mobile, "Source research", "Mobile source evidence", (390, 844))
     page.desktop_screenshot = str(desktop)
     page.mobile_screenshot = str(mobile)
     return page
@@ -254,6 +254,6 @@ def _placeholder_screenshot(path: Path, title: str, subtitle: str, size: tuple[i
     )
     draw.text((36, 48), title, fill="#ffffff")
     draw.text((36, 82), subtitle[:96], fill=accent)
-    draw.text((36, size[1] - 74), "AdFoundry fixture-safe preview", fill="#f5f5f5")
+    draw.text((36, size[1] - 74), "AdFoundry campaign preview", fill="#f5f5f5")
     path.parent.mkdir(parents=True, exist_ok=True)
     image.save(path)

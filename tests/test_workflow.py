@@ -11,7 +11,7 @@ from adfoundry.fixtures import (
     fixture_visual_concept,
 )
 from adfoundry.models import CampaignBrief, CampaignImageAsset
-from adfoundry.workflow import run_campaign
+from adfoundry.workflow import _polish_campaign_copy, run_campaign
 
 
 def test_fixture_campaign_generates_package(tmp_path: Path) -> None:
@@ -59,3 +59,54 @@ def test_campaign_html_embeds_local_hero_image(tmp_path: Path) -> None:
 
     assert 'src="data:image/png;base64,' in campaign_html.html
     assert "file://" not in campaign_html.html
+
+
+def test_campaign_html_uses_brand_color_as_integrated_treatment() -> None:
+    brief = CampaignBrief()
+    page = fixture_page_research(brief)
+    brand = fixture_brand_kit(brief, page)
+    visual = fixture_visual_concept(brief, fixture_strategy_options(brief)[0])
+    copy = fixture_copy(brief)
+
+    campaign_html = build_campaign_html(brief, brand, visual, copy)
+
+    assert "--brand-primary: #111111;" in campaign_html.html
+    assert "min-height: max(720px, 100vh);" in campaign_html.html
+    assert "body {\n      margin: 0;\n      background: #111111;" not in campaign_html.html
+    assert "linear-gradient(90deg, var(--brand-accent), transparent)" in campaign_html.html
+
+
+def test_generic_gift_edit_headline_is_polished() -> None:
+    copy = fixture_copy(CampaignBrief())
+    copy = copy.model_copy(
+        update={
+            "headline": "The Christmas Gift Edit",
+            "alternates": [
+                "Gift Beauty, Beautifully",
+                "Holiday Beauty Gifts, Curated",
+            ],
+            "subheadline": "Premium beauty sets, fragrance, and skincare for holiday gifting.",
+        }
+    )
+
+    polished = _polish_campaign_copy(CampaignBrief(), copy)
+
+    assert polished.headline == "Gift Beauty, Beautifully"
+    assert "The Christmas Gift Edit" in polished.alternates
+
+
+def test_short_mood_gift_edit_headline_is_polished() -> None:
+    brief = CampaignBrief(theme="Halloween")
+    copy = fixture_copy(brief)
+    copy = copy.model_copy(
+        update={
+            "headline": "The Midnight Gift Edit",
+            "alternates": [],
+            "subheadline": "After-dark picks for every athlete, including shoes and apparel.",
+        }
+    )
+
+    polished = _polish_campaign_copy(brief, copy)
+
+    assert polished.headline == "Give the Gift of Movement"
+    assert "The Midnight Gift Edit" in polished.alternates

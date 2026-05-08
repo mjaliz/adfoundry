@@ -297,11 +297,12 @@ def _creative_node(state: CampaignState) -> CampaignState:
         OpenAIModelGateway(state["mode_requested"]).parse(VisualConcept, system, user)
         or fallback_visual
     )
-    system, user = json_prompt("Copywriter Agent", context)
+    system, user = json_prompt("Copywriter Agent", _copywriter_context(context, brief))
     campaign_copy = (
         OpenAIModelGateway(state["mode_requested"]).parse(CampaignCopy, system, user)
         or fallback_copy
     )
+    campaign_copy = _polish_campaign_copy(brief, campaign_copy)
     activities = state.get("activities", [])
     activities = _append_activity(
         {**state, "activities": activities},
@@ -325,6 +326,83 @@ def _creative_node(state: CampaignState) -> CampaignState:
         "campaign_copy": campaign_copy,
         "activities": activities,
     }
+
+
+def _copywriter_context(context: str, brief: CampaignBrief) -> str:
+    return (
+        f"{context}\n\n"
+        "Copy quality requirements:\n"
+        "- The headline must be a campaign line, not a category label or navigation title.\n"
+        "- Avoid formulaic headlines like "
+        f"'The {brief.theme} Gift Edit', '{brief.theme} Gift Guide', "
+        f"'{brief.theme} Gift Picks', and 'Shop {brief.theme} Gifts'.\n"
+        "- Keep the headline short, concrete, brand-fit, and emotionally specific.\n"
+        "- Put merchandising/category language in the subheadline or CTA, not the H1.\n"
+        "- Do not repeat the theme literally unless it is essential to the idea.\n"
+        "- Provide alternates that are genuinely different, not reordered versions of the same label."
+    )
+
+
+def _polish_campaign_copy(brief: CampaignBrief, copy: CampaignCopy) -> CampaignCopy:
+    if not _is_generic_gift_headline(brief, copy.headline):
+        return copy
+
+    replacement = next(
+        (
+            alternate
+            for alternate in copy.alternates
+            if not _is_generic_gift_headline(brief, alternate)
+        ),
+        None,
+    )
+    if not replacement:
+        replacement = _fallback_campaign_headline(brief, copy)
+
+    return copy.model_copy(
+        update={
+            "headline": replacement,
+            "alternates": [
+                candidate
+                for candidate in [copy.headline, *copy.alternates]
+                if candidate != replacement
+            ],
+            "rationale": (
+                f"{copy.rationale} Polished the H1 from a generic gift-edit label "
+                "into a stronger campaign headline."
+            ),
+        }
+    )
+
+
+def _is_generic_gift_headline(brief: CampaignBrief, headline: str) -> bool:
+    normalized = " ".join(headline.lower().replace("-", " ").split())
+    theme = brief.theme.lower()
+    generic_patterns = [
+        f"the {theme} gift edit",
+        f"{theme} gift edit",
+        f"the {theme} gift guide",
+        f"{theme} gift guide",
+        f"the {theme} gift picks",
+        f"{theme} gift picks",
+        f"shop {theme} gifts",
+        "the holiday gift edit",
+        "holiday gift edit",
+        "the gift edit",
+        "gift edit",
+    ]
+    if normalized in generic_patterns:
+        return True
+    words = normalized.split()
+    return len(words) <= 4 and words[-2:] == ["gift", "edit"]
+
+
+def _fallback_campaign_headline(brief: CampaignBrief, copy: CampaignCopy) -> str:
+    text = f"{copy.subheadline} {brief.goal} {brief.audience}".lower()
+    if any(term in text for term in ["beauty", "glow", "skincare", "fragrance"]):
+        return "Gift Beauty, Beautifully"
+    if any(term in text for term in ["sport", "athlete", "performance", "shoe"]):
+        return "Give the Gift of Movement"
+    return "Give Something Loved"
 
 
 def _image_asset_node(state: CampaignState) -> CampaignState:
