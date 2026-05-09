@@ -278,17 +278,18 @@ def build_image_generation_prompt(
 ) -> str:
     image_direction = visual.image_direction.rstrip(".")
     reference_note = (
-        "Use the provided reference images to preserve the business visual style, product cues, and composition language."
+        "Use the provided reference images to preserve authentic brand style, product cues, materials, proportions, and composition language."
         if references
-        else "No usable source reference images were available; generate a brand-consistent campaign hero from the brand kit."
+        else "No usable source reference images were available; generate a brand-consistent campaign hero from the brand kit and brief evidence."
     )
     return (
-        f"Edit/generate a premium landscape campaign hero image for {brand.brand_name}. "
+        f"Create or edit a premium landscape campaign hero image for {brand.brand_name}. "
+        "Use polished commercial art direction suitable for a responsive landing-page hero. "
         f"Campaign occasion: {brief.theme}. Goal: {brief.goal}. Tone: {brief.tone}. "
         f"Brand style: {brand.visual_style}. Creative direction: {image_direction}. "
-        f"{reference_note} Use the occasion as a subtle visual influence, not a literal motif repeated across the image. "
-        "Do not include headline text, CTA text, fake discounts, fake endorsements, watermarks, or logos not present in the references. "
-        "Leave negative space for editable HTML copy and a CTA overlay."
+        f"{reference_note} Express the occasion subtly through mood, palette, styling, environment, or composition rather than literal repeated motifs. "
+        "Keep a clean landscape composition with usable negative space for editable HTML headline copy and a CTA overlay. "
+        "Do not include embedded headline text, CTA text, fake discounts, fake badges, fake endorsements, watermarks, unsupported claims, or logos not present in the references."
     )
 
 

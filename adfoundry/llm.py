@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import TypeVar
+from typing import TypeAlias, TypeVar
 
 from pydantic import BaseModel
 
@@ -7,6 +7,8 @@ from adfoundry.models import RunMode
 from adfoundry.settings import Settings, get_settings
 
 T = TypeVar("T", bound=BaseModel)
+ResponsesContentPart: TypeAlias = dict[str, str]
+ResponsesUserContent: TypeAlias = str | list[ResponsesContentPart]
 
 
 class OpenAIModelGateway:
@@ -28,7 +30,7 @@ class OpenAIModelGateway:
     def should_call_live(self) -> bool:
         return self.mode in {"hybrid", "live"} and self.live_available
 
-    def parse(self, schema: type[T], system: str, user: str) -> T | None:
+    def parse(self, schema: type[T], system: str, user: ResponsesUserContent) -> T | None:
         if not self.should_call_live:
             if self.mode == "live":
                 self.last_error = "OPENAI_API_KEY is not set."
@@ -63,7 +65,8 @@ class OpenAIModelGateway:
 def json_prompt(name: str, context: str) -> tuple[str, str]:
     system = (
         f"You are the {name} in AdFoundry, an agentic campaign builder. "
-        "Return only structured output matching the provided schema. "
-        "Make clear, concise decisions suitable for a polished executive review."
+        "Return only structured output that matches the provided schema exactly. "
+        "Use only the supplied context as evidence; do not invent offers, claims, logos, endorsements, prices, or unsupported brand facts. "
+        "Make specific, concise decisions in polished executive-review language, favoring brand evidence and conversion value over generic marketing ideas."
     )
     return system, context

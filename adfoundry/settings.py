@@ -57,7 +57,7 @@ class Settings(BaseSettings):
         ),
     )
     default_run_mode: RunMode = Field(
-        default="hybrid",
+        default="live",
         validation_alias=AliasChoices("ADFOUNDRY_RUN_MODE", "default_run_mode"),
     )
     output_root: Path = Field(

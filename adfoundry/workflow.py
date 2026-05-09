@@ -8,6 +8,7 @@ from typing import Literal, TypedDict
 from uuid import uuid4
 
 from langchain_core._api.deprecation import LangChainPendingDeprecationWarning
+from PIL import Image
 
 warnings.filterwarnings(
     "ignore",
@@ -29,7 +30,7 @@ from adfoundry.fixtures import (
     fixture_visual_concept,
 )
 from adfoundry.html_generation import generate_campaign_html
-from adfoundry.image_assets import build_campaign_image_asset
+from adfoundry.image_assets import build_campaign_image_asset, image_to_data_url
 from adfoundry.logging_config import configure_logging
 from adfoundry.llm import OpenAIModelGateway, json_prompt
 from adfoundry.models import (
@@ -43,6 +44,7 @@ from adfoundry.models import (
     DecisionRecord,
     HtmlAttempt,
     PageResearch,
+    QaIssue,
     QaReport,
     RenderDiagnostics,
     RunMode,
@@ -189,6 +191,16 @@ def _brand_node(state: CampaignState) -> CampaignState:
     context = json.dumps(
         {"brief": brief.model_dump(), "page": page.model_dump()}, indent=2
     )
+    context = _agent_context(
+        context,
+        "Brand analysis requirements",
+        [
+            "Extract brand facts only from the supplied page evidence and brief.",
+            "Prefer concrete products, colors, voice, and visual cues over generic category assumptions.",
+            "Calibrate confidence honestly; lower confidence when evidence is thin or conflicting.",
+            "Capture brand constraints that protect authenticity, rights, claims, and visual consistency.",
+        ],
+    )
     system, user = json_prompt("Brand Analyst Agent", context)
     live = OpenAIModelGateway(state["mode_requested"]).parse(BrandKit, system, user)
     brand = live or fallback
@@ -219,6 +231,16 @@ def _strategy_node(state: CampaignState) -> CampaignState:
         {"brief": brief.model_dump(), "brand_kit": brand.model_dump()},
         indent=2,
     )
+    context = _agent_context(
+        context,
+        "Strategy debate requirements",
+        [
+            "Develop meaningfully different strategic territories, not reordered versions of one seasonal idea.",
+            "Prioritize brand fit, audience relevance, conversion potential, and visual distinctiveness.",
+            "Avoid generic holiday, gift-guide, luxury, and discount-led angles unless the evidence supports them.",
+            "Score implementation risk honestly and explain trade-offs in decision-grade language.",
+        ],
+    )
     system, user = json_prompt("Campaign Strategy Debate", context)
     live_options = OpenAIModelGateway(state["mode_requested"]).parse(
         StrategyOptionsOutput, system, user
@@ -244,6 +266,16 @@ def _strategy_node(state: CampaignState) -> CampaignState:
             "selected": selected.model_dump(),
         },
         indent=2,
+    )
+    decision_context = _agent_context(
+        decision_context,
+        "Decision board requirements",
+        [
+            "Make the selected and rejected reasoning audit-ready for an executive review.",
+            "Explain why the chosen option is stronger for the brand, audience, and campaign goal.",
+            "Reject generic or unsupported directions explicitly when they weaken brand credibility.",
+            "Keep each decision concise, specific, and tied to the supplied scorecard evidence.",
+        ],
     )
     system, user = json_prompt("Decision Board Agent", decision_context)
     live_decisions = OpenAIModelGateway(state["mode_requested"]).parse(
@@ -295,7 +327,17 @@ def _creative_node(state: CampaignState) -> CampaignState:
         },
         indent=2,
     )
-    system, user = json_prompt("Creative Director Agent", context)
+    visual_context = _agent_context(
+        context,
+        "Creative direction requirements",
+        [
+            "Create a premium campaign visual concept that can be executed in both image generation and responsive HTML.",
+            "Translate the strategy into layout, image, color, and composition choices with clear constraints.",
+            "Use brand colors as integrated accents unless the evidence supports a more immersive treatment.",
+            "Avoid decorative seasonality that competes with product, brand, or conversion clarity.",
+        ],
+    )
+    system, user = json_prompt("Creative Director Agent", visual_context)
     visual = (
         OpenAIModelGateway(state["mode_requested"]).parse(VisualConcept, system, user)
         or fallback_visual
@@ -331,18 +373,28 @@ def _creative_node(state: CampaignState) -> CampaignState:
     }
 
 
+def _agent_context(context: str, title: str, requirements: list[str]) -> str:
+    return f"{context}\n\n{title}:\n" + "\n".join(
+        f"- {requirement}" for requirement in requirements
+    )
+
+
 def _copywriter_context(context: str, brief: CampaignBrief) -> str:
     return (
         f"{context}\n\n"
         "Copy quality requirements:\n"
-        "- The headline must be a campaign line, not a category label or navigation title.\n"
+        "- Write like a senior brand campaign copywriter: polished, specific, and commercially useful.\n"
+        "- The headline must be a campaign idea, not a category label, navigation title, or SEO phrase.\n"
         "- Avoid formulaic headlines like "
         f"'The {brief.theme} Gift Edit', '{brief.theme} Gift Guide', "
         f"'{brief.theme} Gift Picks', and 'Shop {brief.theme} Gifts'.\n"
+        "- Avoid vague luxury, holiday magic, elevated, unforgettable, and perfect-gift clichés.\n"
         "- Keep the headline short, concrete, brand-fit, and emotionally specific.\n"
         "- Put merchandising/category language in the subheadline or CTA, not the H1.\n"
+        "- Make the CTA honor the brief's preferred action when it is plausible and brand-safe.\n"
+        "- Do not invent discounts, claims, product capabilities, exclusivity, or endorsements.\n"
         "- Do not repeat the theme literally unless it is essential to the idea.\n"
-        "- Provide alternates that are genuinely different, not reordered versions of the same label."
+        "- Provide alternates that explore different creative territories, not reordered versions of the same label."
     )
 
 
@@ -621,6 +673,7 @@ def _merge_live_visual_qa_if_required(
         {
             "brief": state["brief"].model_dump(),
             "campaign_html": {
+                "html": state["campaign_html"].html,
                 "layout": state["campaign_html"].layout,
                 "css_summary": state["campaign_html"].css_summary,
                 "rationale": state["campaign_html"].rationale,
@@ -638,13 +691,76 @@ def _merge_live_visual_qa_if_required(
         },
         indent=2,
     )
+    screenshot_parts = _live_qa_screenshot_parts(
+        state.get("desktop_screenshot"),
+        state.get("mobile_screenshot"),
+    )
+    if not screenshot_parts:
+        return _live_qa_unavailable_report(deterministic_report)
+
+    context = _agent_context(
+        context,
+        "Visual QA requirements",
+        [
+            "Judge the work as a senior visual design QA reviewer, not as a tolerant generator.",
+            "Base visual judgment on the attached desktop and mobile screenshot images plus the raw HTML.",
+            "Prioritize brand consistency, first-viewport CTA visibility, responsive layout, readability, and polish.",
+            "Use render diagnostics and screenshots as evidence; do not approve work that contradicts them.",
+            "If screenshot images are absent, visual inspection was not performed and the campaign must not be approved by live QA.",
+            "If raising issues, make regeneration instructions actionable for the next HTML attempt.",
+        ],
+    )
     system, user = json_prompt("Visual QA Agent", context)
-    live = OpenAIModelGateway(state["mode_requested"]).parse(QaReport, system, user)
+    user_content = [{"type": "input_text", "text": user}, *screenshot_parts]
+    live = OpenAIModelGateway(state["mode_requested"]).parse(QaReport, system, user_content)
     if not live:
         return deterministic_report
     if live.issues or not live.approved:
         return live
     return deterministic_report
+
+
+def _live_qa_unavailable_report(report: QaReport) -> QaReport:
+    issue = QaIssue(
+        severity="high",
+        problem="Live Visual QA could not inspect desktop and mobile screenshots.",
+        suspected_cause="A screenshot file was missing, invalid, or unreadable when live visual QA was required.",
+        recommended_fix="Re-render valid desktop and mobile screenshots before approving the campaign.",
+        regeneration_instruction="Regenerate valid standalone HTML and render real desktop and mobile screenshots before approval.",
+    )
+    return report.model_copy(
+        update={
+            "approved": False,
+            "overall_score": min(report.overall_score, 72),
+            "visual_quality": min(report.visual_quality, 6),
+            "responsive_layout": min(report.responsive_layout, 6),
+            "issues": [*report.issues, issue],
+            "summary": "Live Visual QA was skipped because desktop/mobile screenshots were unavailable or invalid.",
+        }
+    )
+
+
+def _live_qa_screenshot_parts(
+    desktop_screenshot: str | None,
+    mobile_screenshot: str | None,
+) -> list[dict[str, str]] | None:
+    parts: list[dict[str, str]] = []
+    for raw_path in (desktop_screenshot, mobile_screenshot):
+        if not raw_path:
+            return None
+        path = Path(raw_path)
+        try:
+            with Image.open(path) as image:
+                image.verify()
+            parts.append(
+                {
+                    "type": "input_image",
+                    "image_url": image_to_data_url(path),
+                }
+            )
+        except Exception:
+            return None
+    return parts
 
 
 def _append_activity(

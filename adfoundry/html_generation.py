@@ -161,12 +161,14 @@ def _generation_context(
         json.dumps(payload, indent=2, ensure_ascii=False)
         + "\n\nHTML generation requirements:\n"
         "- Return a complete standalone HTML document with inline CSS only.\n"
-        "- Do not choose from a fixed template; design the layout that best fits the evidence and media.\n"
+        "- Design a premium landing page for the supplied brand, strategy, copy, and visual concept; do not use a fixed template.\n"
         "- Use the hero_image.src value exactly for the primary visual if it is non-empty.\n"
-        "- Preserve important image content. If the source image is very wide, prefer contain, a wide band, or a layout with matching aspect ratio over cropping.\n"
-        "- Keep desktop and mobile first viewports polished, readable, and conversion-focused.\n"
-        "- Put a visible CTA above the fold on desktop and mobile.\n"
-        "- Avoid external JS, external CSS, external fonts, and hidden explanatory copy."
+        "- Preserve important image content with aspect-ratio-aware containers; use contain, a wide visual band, or a matching layout for wide assets instead of destructive cropping.\n"
+        "- Keep the headline, supporting copy, and primary CTA visible in the first viewport on desktop and mobile.\n"
+        "- Build clear hierarchy, responsive type, flexible grids, max-width: 100%, min-width: 0, and no horizontal overflow.\n"
+        "- Use brand colors as integrated accents, surfaces, or contrast treatments rather than generic full-page color blocks.\n"
+        "- Treat prior_attempts issues and regeneration_instruction values as mandatory fixes, and do not regress resolved issues.\n"
+        "- Avoid external JS, external CSS, external fonts, hidden explanatory copy, placeholder content, and unsupported claims."
     )
 
 

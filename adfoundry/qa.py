@@ -76,7 +76,7 @@ def _evaluate_diagnostics(
                 problem="Campaign could not be rendered normally.",
                 suspected_cause=diagnostics.error,
                 recommended_fix="Regenerate simpler standalone HTML that Playwright can load without runtime errors.",
-                regeneration_instruction="Remove fragile scripts, external dependencies, and invalid asset references.",
+                regeneration_instruction="Return simpler standalone HTML with inline CSS only; remove scripts, external dependencies, and invalid asset references.",
             )
         )
     if not _screenshots_exist(diagnostics.desktop_screenshot, diagnostics.mobile_screenshot):
@@ -86,7 +86,7 @@ def _evaluate_diagnostics(
                 problem="Rendered screenshots are missing or invalid.",
                 suspected_cause="Playwright did not produce verifiable screenshots.",
                 recommended_fix="Regenerate valid standalone HTML and re-render desktop/mobile screenshots.",
-                regeneration_instruction="Keep all CSS inline and use stable local or data image sources.",
+                regeneration_instruction="Use stable local or data image sources, inline CSS only, and markup Playwright can render for desktop and mobile screenshots.",
             )
         )
 
@@ -131,8 +131,8 @@ def _viewport_issues(label: str, viewport: ViewportRenderDiagnostics) -> list[Qa
                 ),
                 recommended_fix="Regenerate the layout so the important image content fits inside the hero.",
                 regeneration_instruction=(
-                    "Use object-fit: contain, a full-width visual band, or a layout that matches the source image aspect ratio; "
-                    "do not crop wide ecommerce banners into a tall/narrow pane."
+                    "Use aspect-ratio-aware hero containers, object-fit: contain, a full-width visual band, or a matching layout; "
+                    "do not crop wide ecommerce banners into a tall or narrow pane."
                 ),
             )
         )
@@ -143,7 +143,7 @@ def _viewport_issues(label: str, viewport: ViewportRenderDiagnostics) -> list[Qa
                 problem=f"{label.title()} layout has horizontal overflow of {viewport.horizontal_overflow:.0f}px.",
                 suspected_cause="An element is wider than the viewport.",
                 recommended_fix="Constrain all sections, media, and text to the viewport width.",
-                regeneration_instruction="Use max-width: 100%, min-width: 0, responsive grids, and no fixed widths above the viewport.",
+                regeneration_instruction="Use border-box sizing, max-width: 100%, min-width: 0, responsive grids, and no fixed widths above the viewport.",
             )
         )
     if not viewport.cta_box:
@@ -153,7 +153,7 @@ def _viewport_issues(label: str, viewport: ViewportRenderDiagnostics) -> list[Qa
                 problem=f"{label.title()} CTA is missing.",
                 suspected_cause="No anchor, button, or role=button element was detected.",
                 recommended_fix="Add a prominent clickable CTA above the fold.",
-                regeneration_instruction="Render a visible <a href> CTA using the campaign CTA text and brief URL.",
+                regeneration_instruction="Render a prominent visible <a href> CTA above the fold using the campaign CTA text and brief URL.",
             )
         )
     elif not viewport.cta_above_fold:
@@ -163,7 +163,7 @@ def _viewport_issues(label: str, viewport: ViewportRenderDiagnostics) -> list[Qa
                 problem=f"{label.title()} CTA falls below the first viewport.",
                 suspected_cause="Vertical spacing or media height pushes the CTA out of view.",
                 recommended_fix="Move the CTA higher and reduce first-screen vertical pressure.",
-                regeneration_instruction="Keep the primary headline, supporting copy, and CTA visible without scrolling.",
+                regeneration_instruction="Keep the primary headline, supporting copy, and CTA visible in the first viewport on desktop and mobile.",
             )
         )
     if viewport.text_overflows:
@@ -173,7 +173,7 @@ def _viewport_issues(label: str, viewport: ViewportRenderDiagnostics) -> list[Qa
                 problem=f"{label.title()} text overflows its container.",
                 suspected_cause="Type size or container width is not responsive enough.",
                 recommended_fix="Regenerate with responsive type and flexible text containers.",
-                regeneration_instruction="Use clamp() conservatively, min-width: 0, wrapping, and avoid viewport-width font scaling.",
+                regeneration_instruction="Use conservative clamp() values, min-width: 0, normal wrapping, and avoid viewport-width font scaling."
             )
         )
     return issues
