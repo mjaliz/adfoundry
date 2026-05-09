@@ -13,6 +13,7 @@ from adfoundry.fixtures import (
 from adfoundry.image_assets import (
     build_campaign_image_asset,
     dedupe_and_score_images,
+    download_reference_images,
     extract_image_candidates_from_html,
     validate_image_file,
     generate_openai_campaign_image,
@@ -82,6 +83,42 @@ def test_validate_image_file_accepts_real_image_and_rejects_invalid(tmp_path: Pa
         assert exc
     else:
         raise AssertionError("invalid image should fail validation")
+
+
+def test_validate_image_file_rejects_truncated_image(tmp_path: Path) -> None:
+    image_path = tmp_path / "truncated.jpg"
+    Image.new("RGB", (500, 400), "#111111").save(image_path, format="JPEG")
+    image_path.write_bytes(image_path.read_bytes()[:-13])
+
+    try:
+        validate_image_file(image_path)
+    except OSError as exc:
+        assert "truncated" in str(exc).lower()
+    else:
+        raise AssertionError("truncated image should fail validation")
+
+
+def test_download_reference_images_skips_truncated_local_file(tmp_path: Path) -> None:
+    image_path = tmp_path / "truncated.jpg"
+    Image.new("RGB", (500, 400), "#111111").save(image_path, format="JPEG")
+    image_path.write_bytes(image_path.read_bytes()[:-13])
+
+    downloaded = download_reference_images(
+        [
+            PageImage(
+                url="https://example.com/truncated.jpg",
+                alt="broken hero",
+                width=500,
+                height=400,
+                role="hero",
+                local_path=str(image_path),
+            )
+        ],
+        tmp_path / "refs",
+        max_references=1,
+    )
+
+    assert downloaded == []
 
 
 def test_mock_openai_generation_writes_generated_asset(tmp_path: Path) -> None:

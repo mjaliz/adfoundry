@@ -7,6 +7,7 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import streamlit as st
+from PIL import Image
 
 from adfoundry.models import CampaignBrief, RunMode
 from adfoundry.settings import get_settings
@@ -120,7 +121,7 @@ def main() -> None:
         if image_asset.fallback_reason:
             st.info(_image_status_message(image_asset.fallback_reason))
         if image_asset.hero_image_path:
-            st.image(image_asset.hero_image_path, caption="Selected campaign hero image", width="stretch")
+            _safe_image(st, image_asset.hero_image_path, "Selected campaign hero image")
         with st.expander("Seasonal image prompt"):
             st.write(image_asset.generation_prompt)
             if image_asset.revised_prompt:
@@ -143,7 +144,7 @@ def main() -> None:
             with st.expander("Selected reference images"):
                 ref_cols = st.columns(min(3, len(image_asset.reference_image_paths)))
                 for index, path in enumerate(image_asset.reference_image_paths):
-                    ref_cols[index % len(ref_cols)].image(path, caption=Path(path).name, width="stretch")
+                    _safe_image(ref_cols[index % len(ref_cols)], path, Path(path).name)
 
         preview_path = Path(package.preview_html_path)
         if preview_path.exists():
@@ -168,9 +169,9 @@ def main() -> None:
 
         image_cols = st.columns(2)
         if package.desktop_screenshot:
-            image_cols[0].image(package.desktop_screenshot, caption="Desktop render", width="stretch")
+            _safe_image(image_cols[0], package.desktop_screenshot, "Desktop render")
         if package.mobile_screenshot:
-            image_cols[1].image(package.mobile_screenshot, caption="Mobile render", width="stretch")
+            _safe_image(image_cols[1], package.mobile_screenshot, "Mobile render")
 
     with tab_export:
         st.subheader("Campaign Package")
@@ -187,6 +188,16 @@ def main() -> None:
             file_name="index.html",
             mime="text/html",
         )
+
+
+def _safe_image(container, image_path: str, caption: str) -> None:
+    try:
+        if not image_path.startswith(("http://", "https://", "data:")):
+            with Image.open(Path(image_path)) as image:
+                image.load()
+        container.image(image_path, caption=caption, width="stretch")
+    except Exception:
+        container.warning(f"Could not display {caption}: image file is invalid or incomplete.")
 
 
 def _image_mode_label(mode: str) -> str:

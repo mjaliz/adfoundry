@@ -306,12 +306,13 @@ def download_reference_images(
         if image.local_path:
             try:
                 local_path = validate_image_file(Path(image.local_path))
+                width, height = _image_dimensions(local_path)
                 downloaded.append(
                     image.model_copy(
                         update={
                             "local_path": str(local_path),
-                            "width": Image.open(local_path).width,
-                            "height": Image.open(local_path).height,
+                            "width": width,
+                            "height": height,
                         }
                     )
                 )
@@ -328,12 +329,13 @@ def download_reference_images(
         try:
             local_path = download_public_image(image.url, destination)
             validated = validate_image_file(local_path)
+            width, height = _image_dimensions(validated)
             downloaded.append(
                 image.model_copy(
                     update={
                         "local_path": str(validated),
-                        "width": Image.open(validated).width,
-                        "height": Image.open(validated).height,
+                        "width": width,
+                        "height": height,
                     }
                 )
             )
@@ -354,13 +356,21 @@ def download_public_image(url: str, destination: Path) -> Path:
 
 def validate_image_file(path: Path) -> Path:
     with Image.open(path) as image:
-        if image.width < 160 or image.height < 160:
-            raise ValueError("Image is too small for campaign use.")
-        if (image.width * image.height) < 80_000:
-            raise ValueError("Image area is too small for campaign use.")
-        if (image.format or "").lower() not in {"jpeg", "png", "webp"}:
-            raise ValueError(f"Unsupported image format: {image.format}")
+        image.load()
+        width, height = image.size
+        image_format = (image.format or "").lower()
+    if width < 160 or height < 160:
+        raise ValueError("Image is too small for campaign use.")
+    if (width * height) < 80_000:
+        raise ValueError("Image area is too small for campaign use.")
+    if image_format not in {"jpeg", "png", "webp"}:
+        raise ValueError(f"Unsupported image format: {image_format}")
     return path
+
+
+def _image_dimensions(path: Path) -> tuple[int, int]:
+    with Image.open(path) as image:
+        return image.width, image.height
 
 
 def generate_openai_campaign_image(
