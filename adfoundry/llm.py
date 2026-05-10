@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import TypeAlias, TypeVar
+from typing import Any, TypeAlias, TypeVar
 
 from pydantic import BaseModel
 
@@ -9,6 +9,7 @@ from adfoundry.settings import Settings, get_settings
 T = TypeVar("T", bound=BaseModel)
 ResponsesContentPart: TypeAlias = dict[str, str]
 ResponsesUserContent: TypeAlias = str | list[ResponsesContentPart]
+ResponsesMessage: TypeAlias = dict[str, Any]
 
 
 class OpenAIModelGateway:
@@ -31,6 +32,19 @@ class OpenAIModelGateway:
         return self.mode in {"hybrid", "live"} and self.live_available
 
     def parse(self, schema: type[T], system: str, user: ResponsesUserContent) -> T | None:
+        return self.parse_messages(
+            schema,
+            [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+        )
+
+    def parse_messages(
+        self,
+        schema: type[T],
+        messages: list[ResponsesMessage],
+    ) -> T | None:
         if not self.should_call_live:
             if self.mode == "live":
                 self.last_error = "OPENAI_API_KEY is not set."
@@ -48,10 +62,7 @@ class OpenAIModelGateway:
             client = OpenAI(**client_kwargs)
             response = client.responses.parse(
                 model=self.model,
-                input=[
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user},
-                ],
+                input=messages,
                 text_format=schema,
             )
             return response.output_parsed

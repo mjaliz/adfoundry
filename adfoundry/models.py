@@ -220,6 +220,49 @@ class AgentActivity(BaseModel):
     artifact: str | None = None
 
 
+class AgentTurn(BaseModel):
+    node: str = ""
+    agent: str = ""
+    message: str = ""
+    artifact: str | None = None
+    attempt: int | None = None
+
+
+class LoopDecision(BaseModel):
+    node: str = "visual_qa"
+    next_node: Literal["html_generate", "package", "dialogue"] = "package"
+    should_repair: bool = False
+    attempt: int = 0
+    score: int = 0
+    approved: bool = False
+    min_score: int = 0
+    html_max_attempts: int = 0
+    max_repairs: int = 0
+    reason: str = ""
+
+
+class DialogueMessage(BaseModel):
+    role: Literal["system", "html_generator", "visual_qa"]
+    content: str
+    artifact_ref: str | None = None
+    attempt: int | None = None
+
+
+class HtmlGeneratorTurn(BaseModel):
+    chat_message: str
+    html: str = ""
+    css_summary: str = ""
+    layout: str = ""
+    rationale: str = ""
+    questions_for_qa: list[str] = Field(default_factory=list)
+
+
+class VisualQaTurn(BaseModel):
+    chat_message: str
+    report: QaReport
+    answers_to_generator: list[str] = Field(default_factory=list)
+
+
 class CampaignPackage(BaseModel):
     run_id: str
     created_at: datetime
@@ -239,6 +282,9 @@ class CampaignPackage(BaseModel):
     html_attempts: list[HtmlAttempt] = Field(default_factory=list)
     render_diagnostics: RenderDiagnostics | None = None
     activities: list[AgentActivity] = Field(default_factory=list)
+    agent_turns: list[AgentTurn] = Field(default_factory=list)
+    loop_decisions: list[LoopDecision] = Field(default_factory=list)
+    dialogue_messages: list[DialogueMessage] = Field(default_factory=list)
     output_dir: str
     preview_html_path: str
     desktop_screenshot: str | None = None

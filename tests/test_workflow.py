@@ -1,5 +1,5 @@
+import json
 from pathlib import Path
-from types import SimpleNamespace
 
 from PIL import Image
 
@@ -12,14 +12,16 @@ from adfoundry.fixtures import (
     fixture_visual_concept,
 )
 from adfoundry.models import (
+    AgentTurn,
     CampaignBrief,
-    CampaignHtml,
     CampaignImageAsset,
+    HtmlGeneratorTurn,
+    LoopDecision,
+    QaIssue,
     QaReport,
-    RenderDiagnostics,
-    ViewportRenderDiagnostics,
+    VisualQaTurn,
 )
-from adfoundry.workflow import _merge_live_visual_qa_if_required, _polish_campaign_copy, run_campaign
+from adfoundry.workflow import _polish_campaign_copy, run_campaign
 
 
 def test_fixture_campaign_generates_package(tmp_path: Path) -> None:
@@ -33,9 +35,43 @@ def test_fixture_campaign_generates_package(tmp_path: Path) -> None:
     assert package.campaign_image_asset.hero_image_path is not None
     assert len(package.activities) >= 8
     assert Path(package.preview_html_path).exists()
-    assert Path(package.output_dir, "campaign_package.json").exists()
+    package_path = Path(package.output_dir, "campaign_package.json")
+    assert package_path.exists()
     assert len(package.html_attempts) == 2
     assert package.render_diagnostics is not None
+
+    expected_nodes = [
+        "research",
+        "brand",
+        "strategy",
+        "creative",
+        "image_asset",
+        "html_generate",
+        "render",
+        "visual_qa",
+        "html_generate",
+        "render",
+        "visual_qa",
+        "package",
+    ]
+    assert [turn.node for turn in package.agent_turns] == expected_nodes
+    assert [
+        turn.attempt
+        for turn in package.agent_turns
+        if turn.node in {"html_generate", "render", "visual_qa"}
+    ] == [0, 0, 0, 1, 1, 1]
+    assert [decision.next_node for decision in package.loop_decisions] == [
+        "html_generate",
+        "package",
+    ]
+    assert package.loop_decisions[0].should_repair is True
+    assert package.loop_decisions[-1].should_repair is False
+
+    package_json = json.loads(package_path.read_text())
+    assert [turn["node"] for turn in package_json["agent_turns"]] == expected_nodes
+    assert [decision["next_node"] for decision in package_json["loop_decisions"]] == [
+        decision.next_node for decision in package.loop_decisions
+    ]
 
 
 def test_campaign_records_decisions_and_repair_history(tmp_path: Path) -> None:
@@ -50,6 +86,20 @@ def test_campaign_records_decisions_and_repair_history(tmp_path: Path) -> None:
     assert package.repair_history[-1].approved is True
     assert package.html_attempts[0].qa_report is not None
     assert package.html_attempts[-1].campaign_html.repair_notes
+    assert len(package.loop_decisions) == len(package.repair_history)
+    assert package.loop_decisions[0].attempt == 0
+    assert package.loop_decisions[-1].attempt == 1
+    assert package.loop_decisions[0].next_node == "html_generate"
+    assert package.loop_decisions[-1].next_node == "package"
+    assert package.loop_decisions[-1].score == package.qa_report.overall_score
+
+
+def test_trace_models_have_backward_compatible_defaults() -> None:
+    assert AgentTurn().node == ""
+    assert AgentTurn().attempt is None
+    assert LoopDecision().node == "visual_qa"
+    assert LoopDecision().next_node == "package"
+    assert LoopDecision().should_repair is False
 
 
 def test_campaign_html_embeds_local_hero_image(tmp_path: Path) -> None:
@@ -124,100 +174,269 @@ def test_short_mood_gift_edit_headline_is_polished() -> None:
     assert "The Midnight Gift Edit" in polished.alternates
 
 
-def test_live_visual_qa_receives_raw_html_and_screenshot_images(tmp_path: Path, monkeypatch) -> None:
-    desktop = tmp_path / "desktop.png"
-    mobile = tmp_path / "mobile.png"
-    Image.new("RGB", (1440, 960), "#111111").save(desktop)
-    Image.new("RGB", (390, 844), "#222222").save(mobile)
-    report = _passing_qa_report()
-    state = _live_qa_state(tmp_path, desktop, mobile)
-    captured = {}
+def test_dialogue_passes_qa_critique_into_generator_view(tmp_path: Path, monkeypatch) -> None:
+    """Generator's second turn must see QA's prior chat_message + issues in its prompt."""
+    from adfoundry.dialogue import run_html_qa_dialogue
+    from adfoundry.image_assets import build_campaign_image_asset
 
-    def fake_parse(self, schema, system, user):
-        captured["schema"] = schema
-        captured["system"] = system
-        captured["user"] = user
-        return report
+    brief = CampaignBrief()
+    page = fixture_page_research(brief)
+    brand = fixture_brand_kit(brief, page)
+    options = fixture_strategy_options(brief)
+    visual = fixture_visual_concept(brief, options[0])
+    copy = fixture_copy(brief)
+    image_asset = build_campaign_image_asset(brief, page, brand, visual, tmp_path, "fixture")
+
+    qa_chat_messages = [
+        "First take: the headline overflows on mobile and the CTA is not visible above the fold.",
+        "Approved on the second pass; the CTA is now in the first viewport.",
+    ]
+    gen_calls: list[list[dict]] = []
+    qa_calls: list[list[dict]] = []
+    gen_responses = [
+        HtmlGeneratorTurn(
+            chat_message="Submitting v1. I went with a tall hero on mobile.",
+            html="<!doctype html><html><body><h1>v1</h1><a href='#'>Buy</a></body></html>",
+            css_summary="v1",
+            layout="hero/copy",
+            rationale="Initial hero layout.",
+            questions_for_qa=["Should the CTA be a button or anchor?"],
+        ),
+        HtmlGeneratorTurn(
+            chat_message="Pulled the CTA above the fold and trimmed the headline as you asked.",
+            html="<!doctype html><html><body><h1>v2</h1><a href='#'>Buy</a></body></html>",
+            css_summary="v2",
+            layout="hero/copy",
+            rationale="Tightened first viewport.",
+            questions_for_qa=[],
+        ),
+    ]
+    qa_responses = [
+        VisualQaTurn(
+            chat_message=qa_chat_messages[0],
+            answers_to_generator=["Anchor styled as a button is fine."],
+            report=QaReport(
+                approved=False,
+                overall_score=72,
+                visual_quality=7,
+                brand_consistency=8,
+                readability=6,
+                cta_visibility=4,
+                responsive_layout=6,
+                accessibility=8,
+                issues=[
+                    QaIssue(
+                        severity="high",
+                        problem="Mobile CTA is below the fold.",
+                        recommended_fix="Move the CTA into the first viewport.",
+                        suspected_cause="Hero copy block is too tall.",
+                        regeneration_instruction="Shrink the hero copy block so the CTA fits in the first 844px on mobile.",
+                    )
+                ],
+                summary="CTA below fold on mobile.",
+            ),
+        ),
+        VisualQaTurn(
+            chat_message=qa_chat_messages[1],
+            answers_to_generator=[],
+            report=QaReport(
+                approved=True,
+                overall_score=92,
+                visual_quality=9,
+                brand_consistency=9,
+                readability=9,
+                cta_visibility=9,
+                responsive_layout=9,
+                accessibility=9,
+                issues=[],
+                summary="Approved on second attempt.",
+            ),
+        ),
+    ]
+
+    def fake_parse_messages(self, schema, messages):
+        if schema is HtmlGeneratorTurn:
+            gen_calls.append(messages)
+            return gen_responses[len(gen_calls) - 1]
+        if schema is VisualQaTurn:
+            qa_calls.append(messages)
+            return qa_responses[len(qa_calls) - 1]
+        raise AssertionError(f"unexpected schema {schema}")
 
     monkeypatch.setattr(
-        "adfoundry.workflow.get_settings",
-        lambda: SimpleNamespace(html_require_live_qa=True),
+        "adfoundry.dialogue.OpenAIModelGateway.parse_messages", fake_parse_messages
     )
-    monkeypatch.setattr("adfoundry.workflow.OpenAIModelGateway.parse", fake_parse)
+    monkeypatch.setattr(
+        "adfoundry.dialogue.OpenAIModelGateway.should_call_live",
+        property(lambda self: True),
+    )
+    # Skip the real Playwright render; the test focuses on dialogue plumbing.
+    from adfoundry.models import RenderDiagnostics, ViewportRenderDiagnostics
 
-    result = _merge_live_visual_qa_if_required(state, report)
+    def fake_render(html, output_dir, attempt=None):
+        return RenderDiagnostics(
+            html_path=str(output_dir / "index.html"),
+            desktop_screenshot="",
+            mobile_screenshot="",
+            desktop=ViewportRenderDiagnostics(viewport={"width": 1440, "height": 960}),
+            mobile=ViewportRenderDiagnostics(viewport={"width": 390, "height": 844}),
+        )
 
-    assert result is report
-    assert captured["schema"] is QaReport
-    user = captured["user"]
-    assert user[0]["type"] == "input_text"
-    assert "<main><h1>Generated campaign</h1></main>" in user[0]["text"]
-    image_parts = user[1:]
-    assert [part["type"] for part in image_parts] == ["input_image", "input_image"]
-    assert all(part["image_url"].startswith("data:image/png;base64,") for part in image_parts)
+    monkeypatch.setattr("adfoundry.dialogue.render_campaign_html", fake_render)
+    # Bypass the deterministic-evaluator floor: this test exercises the live
+    # dialogue plumbing, not the heuristic guard.
+    monkeypatch.setattr(
+        "adfoundry.dialogue.evaluate_campaign",
+        lambda *args, **kwargs: QaReport(
+            approved=False,
+            overall_score=80,
+            visual_quality=8,
+            brand_consistency=8,
+            readability=8,
+            cta_visibility=8,
+            responsive_layout=8,
+            accessibility=8,
+            issues=[],
+            summary="stubbed",
+        ),
+    )
+    monkeypatch.setattr(
+        "adfoundry.dialogue.get_settings",
+        lambda: __import__("adfoundry.settings", fromlist=["Settings"]).Settings(
+            ADFOUNDRY_HTML_MAX_ATTEMPTS=2,
+            ADFOUNDRY_HTML_MIN_SCORE=85,
+        ),
+    )
+
+    result = run_html_qa_dialogue(
+        brief=brief,
+        page_research=page,
+        brand_kit=brand,
+        selected_strategy=options[0],
+        visual_concept=visual,
+        campaign_copy=copy,
+        campaign_image_asset=image_asset,
+        output_dir=tmp_path,
+        mode="live",
+    )
+
+    # Two turns each, ended on approval
+    assert len(gen_calls) == 2
+    assert len(qa_calls) == 2
+    assert result.final_report.approved is True
+    assert len(result.html_attempts) == 2
+
+    # Generator's second-turn prompt must contain QA's first critique. gen_calls[i]
+    # holds a reference to the live generator_view list, so walk it for the most
+    # recent user input_text part.
+    second_gen_user_text = _latest_user_text(gen_calls[1])
+    assert "Mobile CTA is below the fold." in second_gen_user_text
+
+    # And QA's first prompt must include the Generator's chat_message
+    qa_user_text = _latest_user_text(qa_calls[0])
+    assert "I went with a tall hero on mobile" in qa_user_text
+
+    # The shared transcript captures both sides
+    roles = [m.role for m in result.messages]
+    assert roles == ["html_generator", "visual_qa", "html_generator", "visual_qa"]
 
 
-def test_live_visual_qa_skips_when_screenshots_are_missing(tmp_path: Path, monkeypatch) -> None:
-    mobile = tmp_path / "mobile.png"
-    Image.new("RGB", (390, 844), "#222222").save(mobile)
-    report = _passing_qa_report()
-    state = _live_qa_state(tmp_path, None, mobile)
-    called = False
+def test_dialogue_stops_at_turn_budget_when_qa_never_approves(tmp_path: Path, monkeypatch) -> None:
+    from adfoundry.dialogue import run_html_qa_dialogue
+    from adfoundry.image_assets import build_campaign_image_asset
+    from adfoundry.models import RenderDiagnostics, ViewportRenderDiagnostics
 
-    def fake_parse(self, schema, system, user):
-        nonlocal called
-        called = True
-        return report
+    brief = CampaignBrief()
+    page = fixture_page_research(brief)
+    brand = fixture_brand_kit(brief, page)
+    options = fixture_strategy_options(brief)
+    visual = fixture_visual_concept(brief, options[0])
+    copy = fixture_copy(brief)
+    image_asset = build_campaign_image_asset(brief, page, brand, visual, tmp_path, "fixture")
+
+    rejection = QaReport(
+        approved=False,
+        overall_score=60,
+        visual_quality=5,
+        brand_consistency=5,
+        readability=5,
+        cta_visibility=5,
+        responsive_layout=5,
+        accessibility=5,
+        issues=[
+            QaIssue(
+                severity="high",
+                problem="Still failing.",
+                recommended_fix="Try again.",
+                suspected_cause="cause",
+                regeneration_instruction="redo it",
+            )
+        ],
+        summary="Rejected.",
+    )
+
+    def fake_parse_messages(self, schema, messages):
+        if schema is HtmlGeneratorTurn:
+            return HtmlGeneratorTurn(
+                chat_message="Trying.",
+                html="<!doctype html><html><body><h1>x</h1></body></html>",
+                css_summary="x",
+                layout="x",
+                rationale="x",
+            )
+        return VisualQaTurn(chat_message="Still failing.", report=rejection)
 
     monkeypatch.setattr(
-        "adfoundry.workflow.get_settings",
-        lambda: SimpleNamespace(html_require_live_qa=True),
+        "adfoundry.dialogue.OpenAIModelGateway.parse_messages", fake_parse_messages
     )
-    monkeypatch.setattr("adfoundry.workflow.OpenAIModelGateway.parse", fake_parse)
-
-    result = _merge_live_visual_qa_if_required(state, report)
-
-    assert result.approved is False
-    assert result.overall_score == 72
-    assert any("could not inspect" in issue.problem for issue in result.issues)
-    assert called is False
-
-
-def _passing_qa_report() -> QaReport:
-    return QaReport(
-        approved=True,
-        overall_score=94,
-        visual_quality=9,
-        brand_consistency=9,
-        readability=9,
-        cta_visibility=9,
-        responsive_layout=9,
-        accessibility=9,
-        issues=[],
-        summary="Deterministic QA passed.",
+    monkeypatch.setattr(
+        "adfoundry.dialogue.OpenAIModelGateway.should_call_live",
+        property(lambda self: True),
     )
-
-
-def _live_qa_state(tmp_path: Path, desktop: Path | None, mobile: Path | None):
-    campaign_html = CampaignHtml(
-        html="<!doctype html><html><body><main><h1>Generated campaign</h1></main></body></html>",
-        css_summary="Responsive hero CSS.",
-        layout="Hero layout.",
-        generation_mode="llm",
-        attempt=0,
-        rationale="Built for visual QA.",
-    )
-    return {
-        "brief": CampaignBrief(),
-        "campaign_html": campaign_html,
-        "desktop_screenshot": str(desktop) if desktop else None,
-        "mobile_screenshot": str(mobile) if mobile else None,
-        "render_diagnostics": RenderDiagnostics(
-            html_path=str(tmp_path / "index.html"),
-            desktop_screenshot=str(desktop) if desktop else "",
-            mobile_screenshot=str(mobile) if mobile else "",
+    monkeypatch.setattr(
+        "adfoundry.dialogue.render_campaign_html",
+        lambda html, output_dir, attempt=None: RenderDiagnostics(
+            html_path=str(output_dir / "index.html"),
+            desktop_screenshot="",
+            mobile_screenshot="",
             desktop=ViewportRenderDiagnostics(viewport={"width": 1440, "height": 960}),
             mobile=ViewportRenderDiagnostics(viewport={"width": 390, "height": 844}),
         ),
-        "mode_requested": "live",
-    }
+    )
+    monkeypatch.setattr(
+        "adfoundry.dialogue.get_settings",
+        lambda: __import__("adfoundry.settings", fromlist=["Settings"]).Settings(
+            ADFOUNDRY_HTML_MAX_ATTEMPTS=2,
+            ADFOUNDRY_HTML_MIN_SCORE=85,
+        ),
+    )
+
+    result = run_html_qa_dialogue(
+        brief=brief,
+        page_research=page,
+        brand_kit=brand,
+        selected_strategy=options[0],
+        visual_concept=visual,
+        campaign_copy=copy,
+        campaign_image_asset=image_asset,
+        output_dir=tmp_path,
+        mode="live",
+    )
+
+    assert len(result.html_attempts) == 2
+    assert result.final_report.approved is False
+
+
+def _latest_user_text(messages: list[dict]) -> str:
+    """Return the input_text content of the most recent user message in a Responses-API view."""
+    for msg in reversed(messages):
+        if msg.get("role") != "user":
+            continue
+        content = msg.get("content")
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict) and part.get("type") == "input_text":
+                    return part.get("text", "")
+    return ""

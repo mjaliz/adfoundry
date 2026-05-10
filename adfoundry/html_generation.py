@@ -23,6 +23,20 @@ from adfoundry.models import (
 )
 from adfoundry.settings import Settings, get_settings
 
+GENERATION_REQUIREMENTS = (
+    "HTML generation requirements:\n"
+    "- Return a complete standalone HTML document with inline CSS only.\n"
+    "- Design a premium landing page for the supplied brand, strategy, copy, and visual concept; do not use a fixed template.\n"
+    "- Use the hero_image.src value exactly for the primary visual if it is non-empty.\n"
+    "- Preserve important image content with aspect-ratio-aware containers; use contain, a wide visual band, or a matching layout for wide assets instead of destructive cropping.\n"
+    "- Keep the headline, supporting copy, and primary CTA visible in the first viewport on desktop and mobile.\n"
+    "- Build clear hierarchy, responsive type, flexible grids, max-width: 100%, min-width: 0, and no horizontal overflow.\n"
+    "- Use brand colors as integrated accents, surfaces, or contrast treatments rather than generic full-page color blocks.\n"
+    "- When the brand identity, page evidence, or copy mixes scripts, set the document's lang/dir to the dominant language and wrap opposite-direction inline runs in <bdi> or <span dir=\"...\"> so bidirectional text renders correctly.\n"
+    "- Treat prior_attempts issues and regeneration_instruction values as mandatory fixes, and do not regress resolved issues.\n"
+    "- Avoid external JS, external CSS, external fonts, hidden explanatory copy, placeholder content, and unsupported claims."
+)
+
 
 class HtmlGenerationOutput(BaseModel):
     html: str
@@ -157,19 +171,55 @@ def _generation_context(
         },
         "prior_attempts": [_attempt_summary(attempt_item) for attempt_item in prior_attempts[-3:]],
     }
-    return (
-        json.dumps(payload, indent=2, ensure_ascii=False)
-        + "\n\nHTML generation requirements:\n"
-        "- Return a complete standalone HTML document with inline CSS only.\n"
-        "- Design a premium landing page for the supplied brand, strategy, copy, and visual concept; do not use a fixed template.\n"
-        "- Use the hero_image.src value exactly for the primary visual if it is non-empty.\n"
-        "- Preserve important image content with aspect-ratio-aware containers; use contain, a wide visual band, or a matching layout for wide assets instead of destructive cropping.\n"
-        "- Keep the headline, supporting copy, and primary CTA visible in the first viewport on desktop and mobile.\n"
-        "- Build clear hierarchy, responsive type, flexible grids, max-width: 100%, min-width: 0, and no horizontal overflow.\n"
-        "- Use brand colors as integrated accents, surfaces, or contrast treatments rather than generic full-page color blocks.\n"
-        "- Treat prior_attempts issues and regeneration_instruction values as mandatory fixes, and do not regress resolved issues.\n"
-        "- Avoid external JS, external CSS, external fonts, hidden explanatory copy, placeholder content, and unsupported claims."
+    return json.dumps(payload, indent=2, ensure_ascii=False) + "\n\n" + GENERATION_REQUIREMENTS
+
+
+def build_generator_user_content(
+    brief: CampaignBrief,
+    page_research: PageResearch,
+    brand_kit: BrandKit,
+    selected_strategy: StrategyOption,
+    visual_concept: VisualConcept,
+    campaign_copy: CampaignCopy,
+    campaign_image_asset: CampaignImageAsset | None,
+    output_dir: Path,
+    prior_attempts: list[HtmlAttempt],
+    attempt: int,
+    prior_screenshots: list[str] | None = None,
+    additional_instructions: str = "",
+) -> list[dict[str, str]]:
+    text = _generation_context(
+        brief,
+        page_research,
+        brand_kit,
+        selected_strategy,
+        visual_concept,
+        campaign_copy,
+        campaign_image_asset,
+        output_dir,
+        prior_attempts,
+        attempt,
     )
+    if additional_instructions:
+        text = f"{text}\n\n{additional_instructions}"
+    parts: list[dict[str, str]] = [{"type": "input_text", "text": text}]
+    for path in prior_screenshots or []:
+        url = _safe_image_data_url(path)
+        if url:
+            parts.append({"type": "input_image", "image_url": url})
+    return parts
+
+
+def _safe_image_data_url(path: str | None) -> str | None:
+    if not path:
+        return None
+    p = Path(path)
+    if not p.exists():
+        return None
+    try:
+        return image_to_data_url(p)
+    except Exception:
+        return None
 
 
 def _attempt_summary(attempt: HtmlAttempt) -> dict[str, object]:
