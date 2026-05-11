@@ -50,6 +50,30 @@ export async function listRuns(): Promise<RunSummary[]> {
   return jsonRequest<RunSummary[]>("/api/runs");
 }
 
+export interface ReviseResponse {
+  run_id: string;
+  revision_index: number;
+}
+
+export async function submitRevision(
+  runId: string,
+  feedback: string,
+): Promise<ReviseResponse> {
+  const credentials = getCredentials();
+  const payload: Record<string, unknown> = { feedback };
+  if (credentials) {
+    payload.provider = credentials.provider;
+    payload.api_key = credentials.apiKey;
+  }
+  return jsonRequest<ReviseResponse>(
+    `/api/runs/${encodeURIComponent(runId)}/revise`,
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
 /**
  * Build a URL to a run's artifact file. The backend's events stream emits
  * full disk paths (e.g. `outputs/<run_id>/index.html`) — we strip everything

@@ -78,6 +78,11 @@ def run_html_qa_dialogue(
     settings: Settings | None = None,
     gateway: OpenAIModelGateway | None = None,
     event_bus: RunEventBus | None = None,
+    prior_messages: list[DialogueMessage] | None = None,
+    prior_attempts: list[HtmlAttempt] | None = None,
+    prior_repair_history: list[QaReport] | None = None,
+    human_feedback: str | None = None,
+    attempt_offset: int = 0,
 ) -> DialogueResult:
     def _pub(type: str, data: dict) -> None:
         if event_bus is not None:
@@ -87,9 +92,12 @@ def run_html_qa_dialogue(
     gateway = gateway or OpenAIModelGateway(mode, settings=settings)
     max_attempts = max(1, settings.html_max_attempts)
 
-    messages: list[DialogueMessage] = []
-    html_attempts: list[HtmlAttempt] = []
-    repair_history: list[QaReport] = []
+    # Seed the running history with any prior context the caller passed in.
+    # Revisions use this to extend an earlier run's dialogue rather than
+    # starting fresh; copy so the caller's lists are not mutated.
+    messages: list[DialogueMessage] = list(prior_messages or [])
+    html_attempts: list[HtmlAttempt] = list(prior_attempts or [])
+    repair_history: list[QaReport] = list(prior_repair_history or [])
 
     # Per-agent message views for the OpenAI Responses API.
     # Each agent sees a system message plus the running conversation projected
@@ -99,9 +107,46 @@ def run_html_qa_dialogue(
     ]
     qa_view: list[dict[str, Any]] = [{"role": "system", "content": QA_SYSTEM}]
 
+    # When we have prior attempts (a revision), preseed the "final" state so the
+    # generator's "keep prior HTML and continue chatting" branch reuses the
+    # actual prior HTML instead of falling back to fixture.
     final_html: CampaignHtml | None = None
     final_diagnostics: RenderDiagnostics | None = None
     final_report: QaReport | None = None
+    if html_attempts:
+        last = html_attempts[-1]
+        final_html = last.campaign_html
+        final_diagnostics = last.render_diagnostics
+        final_report = last.qa_report
+
+    # Emit a human "Director" bubble at the start of a revision so the UI
+    # shows the feedback turn alongside the agent turns. Also append a
+    # DialogueMessage with role="human" so future revisions (or replay) see it.
+    feedback_text = (human_feedback or "").strip() or None
+    if feedback_text is not None:
+        _pub(
+            "agent_message_started",
+            {"role": "human", "attempt": attempt_offset},
+        )
+        _pub(
+            "agent_message_delta",
+            {"role": "human", "attempt": attempt_offset, "text": feedback_text},
+        )
+        _pub(
+            "agent_message_completed",
+            {
+                "role": "human",
+                "attempt": attempt_offset,
+                "chat_message": feedback_text,
+            },
+        )
+        messages.append(
+            DialogueMessage(
+                role="human",
+                content=feedback_text,
+                attempt=attempt_offset,
+            )
+        )
 
     def fallback_html_for(attempt_idx: int) -> CampaignHtml:
         return fallback_generate_campaign_html(
@@ -138,12 +183,23 @@ def run_html_qa_dialogue(
         parsed = gateway.stream_messages(schema, view, on_chat_delta=on_delta)
         return parsed, True
 
-    for attempt in range(max_attempts):
+    for loop_index in range(max_attempts):
+        attempt = attempt_offset + loop_index
         logger.info("Dialogue turn start: generator attempt={}", attempt)
         _pub("agent_message_started", {"role": "html_generator", "attempt": attempt})
 
         prior_screenshots = _last_screenshots(html_attempts)
         additional = _additional_generator_instructions(attempt, html_attempts)
+        if feedback_text and loop_index == 0:
+            director_block = (
+                "Director instruction from the human reviewing the prior result. "
+                "Treat this as the latest authoritative direction; where it "
+                "conflicts with earlier QA feedback, follow the Director.\n"
+                f"  > {feedback_text}\n"
+            )
+            additional = (
+                director_block + "\n\n" + additional if additional else director_block
+            )
         gen_user_content = build_generator_user_content(
             brief,
             page_research,

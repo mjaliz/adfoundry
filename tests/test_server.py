@@ -383,6 +383,191 @@ def test_start_run_openai_provider_clears_base_url(
     assert settings.openai_base_url is None
 
 
+def test_revise_endpoint_e2e_fixture_mode(monkeypatch, tmp_path: Path) -> None:
+    """Run a fixture-mode campaign to completion, then POST /revise and
+    verify the package gains new attempts + a human DialogueMessage."""
+    _patch_output_root(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    # 1) Run an initial fixture-mode campaign to completion.
+    start = client.post(
+        "/api/runs",
+        json={"brief": {"url": "https://www.nike.com"}, "mode": "fixture"},
+    )
+    assert start.status_code == 200
+    run_id = start.json()["run_id"]
+    pkg_path = tmp_path / run_id / "campaign_package.json"
+    assert _wait_for(lambda: pkg_path.exists(), timeout=60.0)
+    assert _wait_for(lambda: server_module._get_active(run_id) is None, timeout=10.0)
+
+    before = json.loads(pkg_path.read_text(encoding="utf-8"))
+    attempts_before = len(before["html_attempts"])
+    msgs_before = len(before["dialogue_messages"])
+
+    # 2) Submit a revision in fixture mode.
+    revise = client.post(
+        f"/api/runs/{run_id}/revise",
+        json={"feedback": "Punchier headline, deeper hero blue."},
+    )
+    assert revise.status_code == 200, revise.text
+    assert revise.json()["revision_index"] == 1
+
+    # 3) Wait for the thread to finish.
+    assert _wait_for(lambda: server_module._get_active(run_id) is None, timeout=60.0)
+
+    after = json.loads(pkg_path.read_text(encoding="utf-8"))
+    # Attempts grew by at least 1 (fixture mode always produces an attempt).
+    assert len(after["html_attempts"]) > attempts_before
+    # The human bubble was recorded.
+    human_msgs = [
+        m for m in after["dialogue_messages"] if m["role"] == "human"
+    ]
+    assert len(human_msgs) == 1
+    assert "Punchier headline" in human_msgs[0]["content"]
+    # Dialogue grew overall.
+    assert len(after["dialogue_messages"]) > msgs_before
+
+    # 4) events.jsonl contains revision_started followed by a later run_completed.
+    lines = (tmp_path / run_id / "events.jsonl").read_text(encoding="utf-8").splitlines()
+    types = [json.loads(line)["type"] for line in lines]
+    assert "revision_started" in types
+    # Seq numbering is monotonic across the whole file.
+    seqs = [json.loads(line)["seq"] for line in lines]
+    assert seqs == sorted(seqs)
+    assert len(set(seqs)) == len(seqs)
+
+
+def test_event_bus_append_mode_resumes_seq(tmp_path: Path) -> None:
+    """Reopening a bus with append=True preserves history and continues seq."""
+    from adfoundry.events import RunEventBus, replay_events
+
+    b1 = RunEventBus("resume-run", tmp_path)
+    b1.publish("run_started", {"hello": 1})
+    b1.publish("node_started", {"node": "brand"})
+    b1.publish("node_completed", {"node": "brand"})
+    b1.close()
+
+    b2 = RunEventBus("resume-run", tmp_path, append=True)
+    assert b2._seq == 3  # noqa: SLF001
+    assert len(b2._events) == 3  # noqa: SLF001
+    b2.publish("revision_started", {"revision_index": 1, "feedback": "tighter"})
+    b2.publish("run_completed", {"approved": True, "overall_score": 90})
+    b2.close()
+
+    events = list(replay_events("resume-run", tmp_path.parent))
+    # replay_events takes an output_root, so we need a wrapper directory.
+    # Reading the file directly is simpler and more direct:
+    lines = (tmp_path / "events.jsonl").read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 5
+    seqs = [json.loads(line)["seq"] for line in lines]
+    assert seqs == [1, 2, 3, 4, 5]
+    types = [json.loads(line)["type"] for line in lines]
+    assert types[0] == "run_started"
+    assert types[3] == "revision_started"
+    assert types[4] == "run_completed"
+    # Suppress the unused replay_events binding (kept for ergonomics).
+    _ = events
+
+
+def test_revise_endpoint_404_when_no_package(
+    monkeypatch, tmp_path: Path
+) -> None:
+    _patch_output_root(monkeypatch, tmp_path)
+    (tmp_path / "mid-run").mkdir()
+    client = TestClient(app)
+    resp = client.post(
+        "/api/runs/mid-run/revise", json={"feedback": "punchier please"}
+    )
+    assert resp.status_code == 404
+
+
+def test_revise_endpoint_409_when_active_revision(
+    monkeypatch, tmp_path: Path
+) -> None:
+    _patch_output_root(monkeypatch, tmp_path)
+    run_dir = tmp_path / "busy-run"
+    run_dir.mkdir()
+    # Synthesize a completed package so the endpoint passes the 404 check.
+    (run_dir / "campaign_package.json").write_text(
+        '{"preview_html_path": "index.html"}', encoding="utf-8"
+    )
+    # Pre-register a fake bus as if a revision were already in flight.
+    from adfoundry.events import RunEventBus
+
+    fake_bus = RunEventBus("busy-run", run_dir)
+    server_module._register("busy-run", fake_bus)
+    try:
+        client = TestClient(app)
+        resp = client.post(
+            "/api/runs/busy-run/revise", json={"feedback": "tighter"}
+        )
+        assert resp.status_code == 409
+    finally:
+        fake_bus.close()
+        server_module._unregister("busy-run")
+
+
+def test_revise_endpoint_400_on_empty_feedback(
+    monkeypatch, tmp_path: Path
+) -> None:
+    _patch_output_root(monkeypatch, tmp_path)
+    run_dir = tmp_path / "empty-feedback-run"
+    run_dir.mkdir()
+    (run_dir / "campaign_package.json").write_text("{}", encoding="utf-8")
+    client = TestClient(app)
+    resp = client.post(
+        "/api/runs/empty-feedback-run/revise", json={"feedback": "   "}
+    )
+    assert resp.status_code == 400
+
+
+def test_revise_endpoint_threads_credentials_and_starts_thread(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """POST /revise builds an append-mode bus, kicks a thread that calls
+    run_revision, and the thread receives the per-request settings override."""
+    _patch_output_root(monkeypatch, tmp_path)
+    run_dir = tmp_path / "credentials-revise-run"
+    run_dir.mkdir()
+    (run_dir / "campaign_package.json").write_text("{}", encoding="utf-8")
+
+    captured: dict[str, object] = {}
+
+    def fake_run_revision(**kwargs: object) -> None:
+        captured["settings"] = kwargs.get("settings")
+        captured["feedback"] = kwargs.get("feedback")
+        captured["run_id"] = kwargs.get("run_id")
+
+    monkeypatch.setattr(server_module, "run_revision", fake_run_revision)
+
+    client = TestClient(app)
+    resp = client.post(
+        "/api/runs/credentials-revise-run/revise",
+        json={
+            "feedback": "make headline punchier",
+            "provider": "avalai",
+            "api_key": "sk-from-frontend",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    payload = resp.json()
+    assert payload["run_id"] == "credentials-revise-run"
+    assert payload["revision_index"] == 1
+    assert _wait_for(lambda: "settings" in captured, timeout=5.0)
+    assert _wait_for(
+        lambda: server_module._get_active("credentials-revise-run") is None,
+        timeout=5.0,
+    )
+
+    settings = captured["settings"]
+    assert settings is not None
+    assert settings.openai_api_key == "sk-from-frontend"
+    assert settings.openai_base_url == "https://api.avalai.ir/v1"
+    assert captured["feedback"] == "make headline punchier"
+    # Append-mode bus should have been used: events.jsonl exists after the thread closes.
+    assert (run_dir / "events.jsonl").exists()
+
+
 def test_get_package_zip_falls_back_to_generated_image(
     monkeypatch, tmp_path: Path
 ) -> None:

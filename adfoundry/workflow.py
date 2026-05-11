@@ -210,6 +210,106 @@ def run_campaign(
             event_bus.close()
 
 
+def run_revision(
+    *,
+    run_id: str,
+    feedback: str,
+    output_dir: Path,
+    event_bus: RunEventBus,
+    settings: Settings | None = None,
+) -> CampaignPackage:
+    """Re-engage the HTML/QA dialogue with a human Director turn.
+
+    Loads the completed run's `campaign_package.json`, calls
+    `run_html_qa_dialogue` with the prior messages/attempts pre-seeded plus
+    the new human feedback, then merges the new turns back into the package
+    file on disk. Streams events through the provided (append-mode) bus so
+    SSE clients see the new turns inline with the original run.
+    """
+    settings = settings or get_settings()
+    package_path = Path(output_dir) / "campaign_package.json"
+    package = CampaignPackage.model_validate_json(
+        package_path.read_text(encoding="utf-8")
+    )
+
+    revision_index = sum(
+        1 for m in package.dialogue_messages if m.role == "human"
+    ) + 1
+    attempt_offset = (
+        max((a.attempt for a in package.html_attempts), default=-1) + 1
+    )
+
+    event_bus.publish(
+        "revision_started",
+        {
+            "run_id": run_id,
+            "revision_index": revision_index,
+            "feedback": feedback,
+            "attempt_offset": attempt_offset,
+        },
+    )
+
+    configure_logging(
+        output_dir=Path(output_dir),
+        run_id=run_id,
+        level=settings.log_level,
+    )
+
+    result = run_html_qa_dialogue(
+        brief=package.brief,
+        page_research=package.page_research,
+        brand_kit=package.brand_kit,
+        selected_strategy=package.selected_strategy,
+        visual_concept=package.visual_concept,
+        campaign_copy=package.campaign_copy,
+        campaign_image_asset=package.campaign_image_asset,
+        output_dir=Path(output_dir),
+        mode=package.mode_used,
+        settings=settings,
+        event_bus=event_bus,
+        prior_messages=list(package.dialogue_messages),
+        prior_attempts=list(package.html_attempts),
+        prior_repair_history=list(package.repair_history),
+        human_feedback=feedback,
+        attempt_offset=attempt_offset,
+    )
+
+    merged = package.model_copy(
+        update={
+            "campaign_html": result.final_html,
+            "qa_report": result.final_report,
+            "render_diagnostics": result.final_diagnostics,
+            "dialogue_messages": result.messages,
+            "html_attempts": result.html_attempts,
+            "repair_history": result.repair_history,
+            "preview_html_path": result.final_diagnostics.html_path,
+            "desktop_screenshot": result.desktop_screenshot,
+            "mobile_screenshot": result.mobile_screenshot,
+        }
+    )
+    package_path.write_text(merged.model_dump_json(indent=2), encoding="utf-8")
+
+    event_bus.publish(
+        "revision_completed",
+        {
+            "run_id": run_id,
+            "revision_index": revision_index,
+            "approved": result.final_report.approved,
+            "overall_score": result.final_report.overall_score,
+        },
+    )
+    event_bus.publish(
+        "run_completed",
+        {
+            "run_id": run_id,
+            "output_dir": str(output_dir),
+            "approved": result.final_report.approved,
+            "overall_score": result.final_report.overall_score,
+        },
+    )
+    return merged
+
+
 def build_graph():
     builder = StateGraph(CampaignState)
     builder.add_node("research", _research_node)

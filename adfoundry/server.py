@@ -19,7 +19,7 @@ from loguru import logger
 from adfoundry.events import RunEvent, RunEventBus, replay_events
 from adfoundry.models import CampaignBrief, RunMode
 from adfoundry.settings import Settings, get_settings
-from adfoundry.workflow import run_campaign
+from adfoundry.workflow import run_campaign, run_revision
 
 
 Provider = Literal["openai", "avalai"]
@@ -63,6 +63,17 @@ class StartRunRequest(BaseModel):
 
 class StartRunResponse(BaseModel):
     run_id: str
+
+
+class ReviseRequest(BaseModel):
+    feedback: str
+    provider: Provider | None = None
+    api_key: str | None = None
+
+
+class ReviseResponse(BaseModel):
+    run_id: str
+    revision_index: int
 
 
 class RunSummary(BaseModel):
@@ -124,6 +135,42 @@ def _run_in_thread(
         )
     except Exception as exc:
         logger.exception("Run {} failed: {}", run_id, exc)
+    finally:
+        try:
+            bus.close()
+        except Exception:
+            pass
+        _unregister(run_id)
+
+
+def _revise_in_thread(
+    run_id: str,
+    feedback: str,
+    output_dir: Path,
+    bus: RunEventBus,
+    settings: Settings | None,
+) -> None:
+    try:
+        run_revision(
+            run_id=run_id,
+            feedback=feedback,
+            output_dir=output_dir,
+            event_bus=bus,
+            settings=settings,
+        )
+    except Exception as exc:
+        logger.exception("Revision for run {} failed: {}", run_id, exc)
+        try:
+            bus.publish(
+                "run_failed",
+                {
+                    "run_id": run_id,
+                    "error": str(exc),
+                    "exception_type": type(exc).__name__,
+                },
+            )
+        except Exception:
+            pass
     finally:
         try:
             bus.close()
@@ -206,6 +253,43 @@ def start_run(request: StartRunRequest) -> StartRunResponse:
     )
     thread.start()
     return StartRunResponse(run_id=run_id)
+
+
+@app.post("/api/runs/{run_id}/revise", response_model=ReviseResponse)
+def revise_run(run_id: str, request: ReviseRequest) -> ReviseResponse:
+    _validate_run_id(run_id)
+    feedback = request.feedback.strip()
+    if not feedback:
+        raise HTTPException(status_code=400, detail="feedback is required")
+    run_dir = (_output_root() / run_id).resolve()
+    root = _output_root().resolve()
+    if not str(run_dir).startswith(str(root)):
+        raise HTTPException(status_code=400, detail="path traversal blocked")
+    package_path = run_dir / "campaign_package.json"
+    if not package_path.exists():
+        raise HTTPException(status_code=404, detail="run not ready for revision")
+    if _get_active(run_id) is not None:
+        raise HTTPException(status_code=409, detail="revision already in progress")
+
+    bus = RunEventBus(run_id, run_dir, append=True)
+    _register(run_id, bus)
+    runtime_settings = _resolve_runtime_settings(request.provider, request.api_key)
+    revision_index = (
+        sum(
+            1
+            for ev in bus._events  # noqa: SLF001 — single-process bus snapshot
+            if ev.type == "revision_started"
+        )
+        + 1
+    )
+    thread = threading.Thread(
+        target=_revise_in_thread,
+        args=(run_id, feedback, run_dir, bus, runtime_settings),
+        daemon=True,
+        name=f"revise-{run_id}",
+    )
+    thread.start()
+    return ReviseResponse(run_id=run_id, revision_index=revision_index)
 
 
 @app.get("/api/runs", response_model=list[RunSummary])

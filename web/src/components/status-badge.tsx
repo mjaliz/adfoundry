@@ -24,6 +24,19 @@ export function StatusBadge({ status, className }: StatusBadgeProps) {
           Running
         </Badge>
       );
+    case "revising":
+      return (
+        <Badge
+          variant="outline"
+          className={cn(
+            "gap-1 border-sky-500/40 bg-sky-500/10 text-sky-700 dark:text-sky-300",
+            className,
+          )}
+        >
+          <Loader2 className="h-3 w-3 animate-spin" />
+          Revising
+        </Badge>
+      );
     case "completed":
       return (
         <Badge variant="success" className={className}>

@@ -83,6 +83,9 @@ export interface RunState {
   qa: QaSnapshot | null;
   /** Counter of html_render_completed events — drives iframe key. */
   renderRefreshCounter: number;
+  /** Bumped each time a new SSE subscription should be (re)established —
+   *  e.g. when a revision starts after the original run's bus closed. */
+  subscription: number;
 }
 
 const EMPTY_NODE: NodeState = { status: "idle", summary: "" };
@@ -125,11 +128,16 @@ export const INITIAL_RUN_STATE: RunState = {
   render: null,
   qa: null,
   renderRefreshCounter: 0,
+  subscription: 0,
 };
 
 interface RunStoreActions {
   reset: (runId: string) => void;
   apply: (event: RunEvent) => void;
+  /** Optimistically flip status to "revising" and bump the SSE subscription
+   *  counter. Called by RevisePanel right before POSTing the revision so the
+   *  EventSource picks up the freshly opened bus on the server. */
+  beginRevision: () => void;
 }
 
 export type RunStore = RunState & RunStoreActions;
@@ -332,6 +340,22 @@ function reducer(state: RunState, event: RunEvent): RunState {
       // Cumulative score reflects latest QA — already captured by qa state.
       return next;
     }
+    case "revision_started": {
+      next.status = "revising";
+      next.errorMessage = null;
+      next.completedAt = null;
+      // Don't pre-seed a human bubble here — the agent_message_* events
+      // emitted right after will create it via the standard path, so this
+      // case stays focused on the status flip.
+      return next;
+    }
+    case "revision_completed": {
+      // No state changes needed — run_completed (which arrives right after)
+      // handles the status transition back to "completed". Kept here so the
+      // exhaustiveness guard is satisfied and so SSE clients can use it as
+      // a hook point if they want to animate.
+      return next;
+    }
     default: {
       // Exhaustiveness guard: TS will error if a new event type is added.
       const _exhaustive: never = event;
@@ -347,4 +371,11 @@ export const useRunStore = create<RunStore>((set) => ({
     set(() => ({ ...INITIAL_RUN_STATE, runId })),
   apply: (event: RunEvent) =>
     set((state) => reducer(state, event)),
+  beginRevision: () =>
+    set((state) => ({
+      status: "revising",
+      errorMessage: null,
+      completedAt: null,
+      subscription: state.subscription + 1,
+    })),
 }));

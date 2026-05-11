@@ -133,6 +133,20 @@ export interface DialogueTurnCompletedData {
   issue_count: number;
 }
 
+export interface RevisionStartedData {
+  run_id: string;
+  revision_index: number;
+  feedback: string;
+  attempt_offset: number;
+}
+
+export interface RevisionCompletedData {
+  run_id: string;
+  revision_index: number;
+  approved: boolean;
+  overall_score: number;
+}
+
 export type RunEvent =
   | BaseEvent<"run_started", RunStartedData>
   | BaseEvent<"run_completed", RunCompletedData>
@@ -146,7 +160,9 @@ export type RunEvent =
   | BaseEvent<"html_render_started", HtmlRenderStartedData>
   | BaseEvent<"html_render_completed", HtmlRenderCompletedData>
   | BaseEvent<"qa_report_completed", QaReportCompletedData>
-  | BaseEvent<"dialogue_turn_completed", DialogueTurnCompletedData>;
+  | BaseEvent<"dialogue_turn_completed", DialogueTurnCompletedData>
+  | BaseEvent<"revision_started", RevisionStartedData>
+  | BaseEvent<"revision_completed", RevisionCompletedData>;
 
 export type RunEventType = RunEvent["type"];
 
@@ -164,4 +180,6 @@ export const RUN_EVENT_TYPES: readonly RunEventType[] = [
   "html_render_completed",
   "qa_report_completed",
   "dialogue_turn_completed",
+  "revision_started",
+  "revision_completed",
 ] as const;

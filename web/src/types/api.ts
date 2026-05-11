@@ -3,7 +3,12 @@
 
 export type RunMode = "fixture" | "hybrid" | "live";
 
-export type RunStatus = "running" | "completed" | "failed" | "unknown";
+export type RunStatus =
+  | "running"
+  | "revising"
+  | "completed"
+  | "failed"
+  | "unknown";
 
 export interface CampaignBrief {
   url: string;
@@ -29,7 +34,7 @@ export interface StartRunResponse {
   run_id: string;
 }
 
-export type AgentRole = "html_generator" | "visual_qa";
+export type AgentRole = "html_generator" | "visual_qa" | "human";
 
 export type WorkflowNode =
   | "research"

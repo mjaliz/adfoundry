@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { eventStreamUrl } from "@/lib/api";
 import { useRunStore } from "@/store/run-store";
@@ -13,18 +13,33 @@ export type StreamPhase = "idle" | "connecting" | "open" | "closed" | "error";
  * The backend emits one named SSE event per RunEventType plus the canonical
  * JSON payload — so we subscribe to each named channel and dispatch through
  * a shared parser. Replay-then-tail behavior is provided by the server.
+ *
+ * When the store's `subscription` counter is bumped (e.g. when a revision
+ * begins after the original run's bus closed), the EventSource is torn down
+ * and recreated so a fresh `/events` GET picks up the new append-mode bus.
+ * Replay-then-tail in the backend means no events are lost; the store's
+ * per-event seq dedup keeps the transcript stable on replay.
  */
 export function useEventStream(runId: string | undefined): StreamPhase {
   const apply = useRunStore((s) => s.apply);
   const reset = useRunStore((s) => s.reset);
+  const subscription = useRunStore((s) => s.subscription);
   const [phase, setPhase] = useState<StreamPhase>("idle");
+  const lastRunIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!runId) {
       setPhase("idle");
       return;
     }
-    reset(runId);
+    // Only reset on a true run change. A subscription bump (e.g. revision
+    // re-subscribe) must NOT wipe the existing transcript — the bus replay
+    // will redeliver every prior event and the store's seq dedup keeps
+    // bubbles stable.
+    if (lastRunIdRef.current !== runId) {
+      reset(runId);
+      lastRunIdRef.current = runId;
+    }
     setPhase("connecting");
     const source = new EventSource(eventStreamUrl(runId));
 
@@ -61,7 +76,7 @@ export function useEventStream(runId: string | undefined): StreamPhase {
       source.close();
       setPhase("closed");
     };
-  }, [runId, apply, reset]);
+  }, [runId, subscription, apply, reset]);
 
   return phase;
 }

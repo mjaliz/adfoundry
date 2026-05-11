@@ -5,6 +5,7 @@ import { AgentDialogue } from "@/features/run/agent-dialogue";
 import { BuildTimeline } from "@/features/run/build-timeline";
 import { PreviewPane } from "@/features/run/preview-pane";
 import { QaScorecard } from "@/features/run/qa-scorecard";
+import { RevisePanel } from "@/features/run/revise-panel";
 import { RunHeader } from "@/features/run/run-header";
 import { useEventStream } from "@/hooks/use-event-stream";
 import { useRunStore } from "@/store/run-store";
@@ -59,6 +60,8 @@ export function RunPage() {
           <QaScorecard />
         </aside>
       </div>
+
+      <RevisePanel runId={runId} />
     </div>
   );
 }

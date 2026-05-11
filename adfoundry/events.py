@@ -22,6 +22,8 @@ EventType = Literal[
     "html_render_completed",
     "qa_report_completed",
     "dialogue_turn_completed",
+    "revision_started",
+    "revision_completed",
     "run_completed",
     "run_failed",
 ]
@@ -41,7 +43,9 @@ _CLOSE_SENTINEL: RunEvent | None = None
 class RunEventBus:
     """Thread-safe pub/sub of RunEvents with append-only JSONL persistence."""
 
-    def __init__(self, run_id: str, output_dir: Path) -> None:
+    def __init__(
+        self, run_id: str, output_dir: Path, *, append: bool = False
+    ) -> None:
         self.run_id = run_id
         self.output_dir = output_dir
         self._lock = threading.Lock()
@@ -51,8 +55,25 @@ class RunEventBus:
         self._closed = False
         output_dir.mkdir(parents=True, exist_ok=True)
         self._file_path = output_dir / "events.jsonl"
-        # Truncate so a re-run on the same output_dir starts a fresh log.
-        self._file = self._file_path.open("w", encoding="utf-8")
+        if append and self._file_path.exists():
+            # Resume an existing log: seed the in-memory replay buffer with the
+            # prior events so new subscribers see the full history, and
+            # continue seq numbering past the last event.
+            for line in self._file_path.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    event = RunEvent.model_validate_json(line)
+                except Exception:
+                    continue
+                self._events.append(event)
+                if event.seq > self._seq:
+                    self._seq = event.seq
+            self._file = self._file_path.open("a", encoding="utf-8")
+        else:
+            # Truncate so a fresh run on the same output_dir starts clean.
+            self._file = self._file_path.open("w", encoding="utf-8")
 
     def publish(self, type: EventType, data: dict[str, Any] | None = None) -> RunEvent:
         with self._lock:

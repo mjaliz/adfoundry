@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { Bot, Eye } from "lucide-react";
+import { Bot, Eye, User } from "lucide-react";
 
 import {
   Avatar,
@@ -67,6 +67,9 @@ function BubbleSubscriber({ bubbleId }: { bubbleId: string }) {
 }
 
 function Bubble({ bubble }: { bubble: AgentBubble }) {
+  if (bubble.role === "human") {
+    return <HumanBubble bubble={bubble} />;
+  }
   const isGenerator = bubble.role === "html_generator";
   return (
     <div
@@ -209,11 +212,41 @@ function RoleAvatar({ role }: { role: AgentBubble["role"] }) {
       </Avatar>
     );
   }
+  if (role === "human") {
+    return (
+      <Avatar className="h-8 w-8 border bg-background">
+        <AvatarFallback className="bg-sky-500/15 text-sky-700 dark:text-sky-300">
+          <User className="h-4 w-4" />
+        </AvatarFallback>
+      </Avatar>
+    );
+  }
   return (
     <Avatar className="h-8 w-8 border bg-background">
       <AvatarFallback className="bg-violet-500/15 text-violet-700 dark:text-violet-300">
         <Eye className="h-4 w-4" />
       </AvatarFallback>
     </Avatar>
+  );
+}
+
+function HumanBubble({ bubble }: { bubble: AgentBubble }) {
+  return (
+    <div className="flex w-full justify-center">
+      <div className="flex max-w-[90%] items-start gap-3 rounded-xl border border-sky-500/30 bg-sky-500/5 px-4 py-3 text-sm shadow-sm">
+        <RoleAvatar role="human" />
+        <div className="min-w-0 flex-1">
+          <div className="mb-1 flex items-center gap-2 text-xs font-medium text-sky-700 dark:text-sky-300">
+            <span>Director (you)</span>
+            <span className="rounded-md bg-sky-500/15 px-1.5 py-0.5 text-[10px] uppercase tracking-wide">
+              Feedback
+            </span>
+          </div>
+          <p className="whitespace-pre-wrap break-words leading-relaxed">
+            {bubble.text}
+          </p>
+        </div>
+      </div>
+    </div>
   );
 }

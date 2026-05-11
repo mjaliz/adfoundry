@@ -245,7 +245,7 @@ class LoopDecision(BaseModel):
 
 
 class DialogueMessage(BaseModel):
-    role: Literal["system", "html_generator", "visual_qa"]
+    role: Literal["system", "html_generator", "visual_qa", "human"]
     content: str
     artifact_ref: str | None = None
     attempt: int | None = None
