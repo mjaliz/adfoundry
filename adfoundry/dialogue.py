@@ -8,6 +8,7 @@ from typing import Any, Callable
 from loguru import logger
 
 from adfoundry.browser import render_campaign_html
+from adfoundry.events import RunEventBus
 from adfoundry.html_generation import build_generator_user_content
 from adfoundry.html_generation import (
     generate_campaign_html as fallback_generate_campaign_html,
@@ -76,7 +77,12 @@ def run_html_qa_dialogue(
     mode: RunMode,
     settings: Settings | None = None,
     gateway: OpenAIModelGateway | None = None,
+    event_bus: RunEventBus | None = None,
 ) -> DialogueResult:
+    def _pub(type: str, data: dict) -> None:
+        if event_bus is not None:
+            event_bus.publish(type, data)
+
     settings = settings or get_settings()
     gateway = gateway or OpenAIModelGateway(mode, settings=settings)
     max_attempts = max(1, settings.html_max_attempts)
@@ -112,8 +118,29 @@ def run_html_qa_dialogue(
             settings,
         ).model_copy(update={"attempt": attempt_idx})
 
+    def _call_streaming(
+        schema: type, view: list, role: str, attempt: int
+    ) -> tuple[Any, bool]:
+        """Use streaming when a bus + live gateway are available; else parse_messages.
+
+        Returns (parsed, streamed) — streamed=True means token deltas were already
+        published, so the caller should NOT emit a synthetic full-text delta.
+        """
+        if event_bus is None or not gateway.should_call_live:
+            return gateway.parse_messages(schema, view), False
+
+        def on_delta(text: str) -> None:
+            event_bus.publish(
+                "agent_message_delta",
+                {"role": role, "attempt": attempt, "text": text},
+            )
+
+        parsed = gateway.stream_messages(schema, view, on_chat_delta=on_delta)
+        return parsed, True
+
     for attempt in range(max_attempts):
         logger.info("Dialogue turn start: generator attempt={}", attempt)
+        _pub("agent_message_started", {"role": "html_generator", "attempt": attempt})
 
         prior_screenshots = _last_screenshots(html_attempts)
         additional = _additional_generator_instructions(attempt, html_attempts)
@@ -133,7 +160,9 @@ def run_html_qa_dialogue(
         )
         generator_view.append({"role": "user", "content": gen_user_content})
 
-        gen_turn_raw = gateway.parse_messages(HtmlGeneratorTurn, generator_view)
+        gen_turn_raw, gen_streamed = _call_streaming(
+            HtmlGeneratorTurn, generator_view, "html_generator", attempt
+        )
         used_fallback_html = gen_turn_raw is None or (
             not gen_turn_raw.html.strip() and attempt == 0
         )
@@ -171,15 +200,35 @@ def run_html_qa_dialogue(
             # Very first turn must produce HTML; fall back to fixture.
             campaign_html = fallback_html_for(attempt)
 
+        gen_chat_text = gen_turn.chat_message or (
+            "Submitted updated HTML for review."
+            if new_html_provided
+            else "Continuing without regenerating HTML."
+        )
+        if gen_chat_text and not gen_streamed:
+            _pub(
+                "agent_message_delta",
+                {
+                    "role": "html_generator",
+                    "attempt": attempt,
+                    "text": gen_chat_text,
+                },
+            )
+        _pub(
+            "agent_message_completed",
+            {
+                "role": "html_generator",
+                "attempt": attempt,
+                "chat_message": gen_chat_text,
+                "html_provided": new_html_provided,
+                "questions_for_qa": list(gen_turn.questions_for_qa),
+                "rationale": gen_turn.rationale,
+            },
+        )
         messages.append(
             DialogueMessage(
                 role="html_generator",
-                content=gen_turn.chat_message
-                or (
-                    "Submitted updated HTML for review."
-                    if new_html_provided
-                    else "Continuing without regenerating HTML."
-                ),
+                content=gen_chat_text,
                 artifact_ref=f"html:attempt={attempt}",
                 attempt=attempt,
             )
@@ -187,10 +236,21 @@ def run_html_qa_dialogue(
 
         # Render only if HTML changed (or first turn). Otherwise reuse previous diagnostics.
         if new_html_provided or final_diagnostics is None:
+            _pub("html_render_started", {"attempt": attempt})
             diagnostics = render_campaign_html(
                 campaign_html.html,
                 output_dir,
                 attempt=attempt,
+            )
+            _pub(
+                "html_render_completed",
+                {
+                    "attempt": attempt,
+                    "html_path": diagnostics.html_path,
+                    "desktop_screenshot": diagnostics.desktop_screenshot,
+                    "mobile_screenshot": diagnostics.mobile_screenshot,
+                    "error": diagnostics.error,
+                },
             )
         else:
             diagnostics = final_diagnostics
@@ -217,12 +277,15 @@ def run_html_qa_dialogue(
         )
         qa_view.append({"role": "user", "content": qa_user_content})
 
-        qa_turn = _run_qa_turn(
+        _pub("agent_message_started", {"role": "visual_qa", "attempt": attempt})
+        qa_turn, qa_streamed = _run_qa_turn_streaming(
             gateway=gateway,
             qa_view=qa_view,
             deterministic_report=deterministic_report,
             mode=mode,
             settings=settings,
+            event_bus=event_bus,
+            attempt=attempt,
         )
         qa_view.append(
             {
@@ -232,6 +295,29 @@ def run_html_qa_dialogue(
         )
 
         report = qa_turn.report
+        qa_chat_text = qa_turn.chat_message or (
+            f"Approved attempt {attempt} with score {report.overall_score}."
+            if report.approved
+            else f"Found {len(report.issues)} issue(s); score {report.overall_score}."
+        )
+        if qa_chat_text and not qa_streamed:
+            _pub(
+                "agent_message_delta",
+                {"role": "visual_qa", "attempt": attempt, "text": qa_chat_text},
+            )
+        _pub(
+            "agent_message_completed",
+            {
+                "role": "visual_qa",
+                "attempt": attempt,
+                "chat_message": qa_chat_text,
+                "answers_to_generator": list(qa_turn.answers_to_generator),
+            },
+        )
+        _pub(
+            "qa_report_completed",
+            {"attempt": attempt, "report": report.model_dump(mode="json")},
+        )
         repair_history.append(report)
         html_attempts.append(
             HtmlAttempt(
@@ -244,12 +330,7 @@ def run_html_qa_dialogue(
         messages.append(
             DialogueMessage(
                 role="visual_qa",
-                content=qa_turn.chat_message
-                or (
-                    f"Approved attempt {attempt} with score {report.overall_score}."
-                    if report.approved
-                    else f"Found {len(report.issues)} issue(s); score {report.overall_score}."
-                ),
+                content=qa_chat_text,
                 artifact_ref=f"qa_report:attempt={attempt}",
                 attempt=attempt,
             )
@@ -265,6 +346,15 @@ def run_html_qa_dialogue(
             report.approved,
             report.overall_score,
             len(report.issues),
+        )
+        _pub(
+            "dialogue_turn_completed",
+            {
+                "attempt": attempt,
+                "approved": report.approved,
+                "overall_score": report.overall_score,
+                "issue_count": len(report.issues),
+            },
         )
 
         if report.approved:
@@ -360,22 +450,58 @@ def _run_qa_turn(
     mode: RunMode,
     settings: Settings,
 ) -> VisualQaTurn:
-    if not gateway.should_call_live or mode == "fixture":
-        return _deterministic_qa_turn(deterministic_report)
+    turn, _ = _run_qa_turn_streaming(
+        gateway=gateway,
+        qa_view=qa_view,
+        deterministic_report=deterministic_report,
+        mode=mode,
+        settings=settings,
+        event_bus=None,
+        attempt=0,
+    )
+    return turn
 
-    live = gateway.parse_messages(VisualQaTurn, qa_view)
+
+def _run_qa_turn_streaming(
+    *,
+    gateway: OpenAIModelGateway,
+    qa_view: list[dict[str, Any]],
+    deterministic_report: QaReport,
+    mode: RunMode,
+    settings: Settings,
+    event_bus: RunEventBus | None,
+    attempt: int,
+) -> tuple[VisualQaTurn, bool]:
+    """Run the QA agent's LLM call. Returns (turn, streamed_chat_message)."""
+    if not gateway.should_call_live or mode == "fixture":
+        return _deterministic_qa_turn(deterministic_report), False
+
+    if event_bus is not None:
+        def on_delta(text: str) -> None:
+            event_bus.publish(
+                "agent_message_delta",
+                {"role": "visual_qa", "attempt": attempt, "text": text},
+            )
+        live = gateway.stream_messages(VisualQaTurn, qa_view, on_chat_delta=on_delta)
+        streamed = True
+    else:
+        live = gateway.parse_messages(VisualQaTurn, qa_view)
+        streamed = False
+
     if live is None:
-        return _deterministic_qa_turn(deterministic_report)
+        return _deterministic_qa_turn(deterministic_report), False
     # If live QA produced an apparently-approved report despite deterministic
     # heuristics flagging issues, trust the deterministic floor.
     if live.report.approved and deterministic_report.issues:
-        merged = deterministic_report
-        return VisualQaTurn(
-            chat_message=live.chat_message,
-            report=merged,
-            answers_to_generator=live.answers_to_generator,
+        return (
+            VisualQaTurn(
+                chat_message=live.chat_message,
+                report=deterministic_report,
+                answers_to_generator=live.answers_to_generator,
+            ),
+            streamed,
         )
-    return live
+    return live, streamed
 
 
 def _deterministic_qa_turn(report: QaReport) -> VisualQaTurn:

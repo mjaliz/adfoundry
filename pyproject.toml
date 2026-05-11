@@ -6,6 +6,8 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "beautifulsoup4>=4.14.3",
+    "fastapi>=0.115.0",
+    "httpx>=0.27.0",
     "langgraph>=1.1.10",
     "loguru>=0.7.3",
     "openai>=2.36.0",
@@ -15,5 +17,9 @@ dependencies = [
     "pydantic-settings>=2.14.0",
     "pytest>=9.0.3",
     "streamlit>=1.57.0",
+    "uvicorn[standard]>=0.32.0",
     "watchdog>=6.0.0",
 ]
+
+[project.scripts]
+adfoundry-serve = "adfoundry.cli:serve"

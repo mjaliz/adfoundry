@@ -17,3 +17,4 @@ wheels/
 # Test and demo artifacts
 .pytest_cache/
 outputs/
+.playwright-mcp

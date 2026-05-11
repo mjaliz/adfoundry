@@ -21,6 +21,7 @@ from pydantic import BaseModel
 
 from adfoundry.browser import research_page
 from adfoundry.dialogue import DialogueResult, run_html_qa_dialogue
+from adfoundry.events import EventType, RunEventBus
 from adfoundry.fixtures import (
     choose_strategy,
     fixture_brand_kit,
@@ -85,6 +86,13 @@ class CampaignState(TypedDict, total=False):
     render_diagnostics: RenderDiagnostics
     repair_attempts: int
     package: CampaignPackage
+    event_bus: RunEventBus | None
+
+
+def _pub(state: CampaignState, type: EventType, data: dict | None = None) -> None:
+    bus = state.get("event_bus")
+    if bus is not None:
+        bus.publish(type, data or {})
 
 
 class StrategyOptionsOutput(BaseModel):
@@ -99,12 +107,15 @@ def run_campaign(
     brief: CampaignBrief,
     mode: RunMode | None = None,
     output_root: Path | str | None = None,
+    event_bus: RunEventBus | None = None,
+    run_id: str | None = None,
 ) -> CampaignPackage:
     settings = get_settings()
     mode = mode or settings.default_run_mode
     output_root = output_root or settings.output_root
     normalized_brief = brief.model_copy(update={"url": ensure_http_url(brief.url)})
-    run_id = datetime.now(UTC).strftime("%Y%m%d%H%M%S") + "-" + uuid4().hex[:8]
+    if run_id is None:
+        run_id = datetime.now(UTC).strftime("%Y%m%d%H%M%S") + "-" + uuid4().hex[:8]
     output_dir = Path(output_root) / run_id
     output_dir.mkdir(parents=True, exist_ok=True)
     configure_logging(output_dir=output_dir, run_id=run_id, level=settings.log_level)
@@ -117,6 +128,10 @@ def run_campaign(
         normalized_brief.goal,
         output_dir,
     )
+
+    owns_bus = event_bus is None
+    if owns_bus:
+        event_bus = RunEventBus(run_id, output_dir)
 
     graph = build_graph()
     initial_state: CampaignState = {
@@ -132,10 +147,47 @@ def run_campaign(
         "loop_decisions": [],
         "dialogue_messages": [],
         "repair_attempts": 0,
+        "event_bus": event_bus,
     }
-    final_state = graph.invoke(initial_state)
-    logger.info("Campaign run finished run_id={} output_dir={}", run_id, output_dir)
-    return final_state["package"]
+    try:
+        event_bus.publish(
+            "run_started",
+            {
+                "run_id": run_id,
+                "mode": mode,
+                "brief": normalized_brief.model_dump(mode="json"),
+                "output_dir": str(output_dir),
+            },
+        )
+        final_state = graph.invoke(initial_state)
+        package = final_state["package"]
+        event_bus.publish(
+            "run_completed",
+            {
+                "run_id": run_id,
+                "output_dir": str(output_dir),
+                "approved": package.qa_report.approved,
+                "overall_score": package.qa_report.overall_score,
+            },
+        )
+        logger.info("Campaign run finished run_id={} output_dir={}", run_id, output_dir)
+        return package
+    except Exception as exc:
+        try:
+            event_bus.publish(
+                "run_failed",
+                {
+                    "run_id": run_id,
+                    "error": str(exc),
+                    "exception_type": type(exc).__name__,
+                },
+            )
+        except Exception:  # pragma: no cover - bus might already be closed
+            pass
+        raise
+    finally:
+        if owns_bus:
+            event_bus.close()
 
 
 def build_graph():
@@ -161,6 +213,7 @@ def build_graph():
 
 def _research_node(state: CampaignState) -> CampaignState:
     logger.info("Workflow step start: research")
+    _pub(state, "node_started", {"node": "research"})
     page = research_page(state["brief"], state["output_dir"], state["mode_requested"])
     activities = _append_activity(
         state,
@@ -186,6 +239,20 @@ def _research_node(state: CampaignState) -> CampaignState:
         page.desktop_screenshot,
         page.mobile_screenshot,
     )
+    _pub(
+        state,
+        "node_completed",
+        {
+            "node": "research",
+            "final_url": page.final_url,
+            "title": page.title,
+            "source": page.source,
+            "desktop_screenshot": page.desktop_screenshot,
+            "mobile_screenshot": page.mobile_screenshot,
+            "color_candidates": page.color_candidates,
+            "image_count": len(page.image_assets),
+        },
+    )
     return {
         "page_research": page,
         "activities": activities,
@@ -196,6 +263,7 @@ def _research_node(state: CampaignState) -> CampaignState:
 
 def _brand_node(state: CampaignState) -> CampaignState:
     logger.info("Workflow step start: brand")
+    _pub(state, "node_started", {"node": "brand"})
     brief = state["brief"]
     page = state["page_research"]
     fallback = fixture_brand_kit(brief, page)
@@ -234,11 +302,23 @@ def _brand_node(state: CampaignState) -> CampaignState:
         f"Interpreted {brand.brand_name} as {brand.tone_of_voice.lower()}.",
         "BrandKit",
     )
+    _pub(
+        state,
+        "node_completed",
+        {
+            "node": "brand",
+            "brand_name": brand.brand_name,
+            "industry": brand.industry,
+            "primary_colors": brand.primary_colors,
+            "tone_of_voice": brand.tone_of_voice,
+        },
+    )
     return {"brand_kit": brand, "activities": activities, "agent_turns": agent_turns}
 
 
 def _strategy_node(state: CampaignState) -> CampaignState:
     logger.info("Workflow step start: strategy")
+    _pub(state, "node_started", {"node": "strategy"})
     brief = state["brief"]
     brand = state["brand_kit"]
     fallback_options = fixture_strategy_options(brief)
@@ -329,6 +409,17 @@ def _strategy_node(state: CampaignState) -> CampaignState:
         len(options),
         len(decisions),
     )
+    _pub(
+        state,
+        "node_completed",
+        {
+            "node": "strategy",
+            "selected_angle": selected.angle,
+            "selected_name": selected.name,
+            "options_count": len(options),
+            "decisions_count": len(decisions),
+        },
+    )
     return {
         "strategy_options": options,
         "selected_strategy": selected,
@@ -340,6 +431,7 @@ def _strategy_node(state: CampaignState) -> CampaignState:
 
 def _creative_node(state: CampaignState) -> CampaignState:
     logger.info("Workflow step start: creative")
+    _pub(state, "node_started", {"node": "creative"})
     brief = state["brief"]
     selected = state["selected_strategy"]
     fallback_visual = fixture_visual_concept(brief, selected)
@@ -398,6 +490,17 @@ def _creative_node(state: CampaignState) -> CampaignState:
         "Workflow step done: creative visual={} headline={}",
         visual.concept_name,
         campaign_copy.headline,
+    )
+    _pub(
+        state,
+        "node_completed",
+        {
+            "node": "creative",
+            "concept_name": visual.concept_name,
+            "headline": campaign_copy.headline,
+            "subheadline": campaign_copy.subheadline,
+            "cta": campaign_copy.cta,
+        },
     )
     return {
         "visual_concept": visual,
@@ -496,6 +599,7 @@ def _fallback_campaign_headline(brief: CampaignBrief, copy: CampaignCopy) -> str
 
 def _image_asset_node(state: CampaignState) -> CampaignState:
     logger.info("Workflow step start: image_asset")
+    _pub(state, "node_started", {"node": "image_asset"})
     asset = build_campaign_image_asset(
         state["brief"],
         state["page_research"],
@@ -529,6 +633,17 @@ def _image_asset_node(state: CampaignState) -> CampaignState:
         message,
         "CampaignImageAsset",
     )
+    _pub(
+        state,
+        "node_completed",
+        {
+            "node": "image_asset",
+            "generation_mode": asset.generation_mode,
+            "hero_image_path": asset.hero_image_path,
+            "reference_count": len(asset.reference_image_paths),
+            "fallback_reason": asset.fallback_reason,
+        },
+    )
     return {
         "campaign_image_asset": asset,
         "activities": activities,
@@ -538,6 +653,7 @@ def _image_asset_node(state: CampaignState) -> CampaignState:
 
 def _dialogue_node(state: CampaignState) -> CampaignState:
     logger.info("Workflow step start: dialogue")
+    _pub(state, "node_started", {"node": "dialogue"})
     settings = get_settings()
     result: DialogueResult = run_html_qa_dialogue(
         brief=state["brief"],
@@ -550,6 +666,7 @@ def _dialogue_node(state: CampaignState) -> CampaignState:
         output_dir=state["output_dir"],
         mode=state["mode_requested"],
         settings=settings,
+        event_bus=state.get("event_bus"),
     )
 
     activities = state.get("activities", [])
@@ -655,6 +772,17 @@ def _dialogue_node(state: CampaignState) -> CampaignState:
         len(result.html_attempts),
         len(result.messages),
     )
+    _pub(
+        state,
+        "node_completed",
+        {
+            "node": "dialogue",
+            "approved": result.final_report.approved,
+            "overall_score": result.final_report.overall_score,
+            "attempts": len(result.html_attempts),
+            "messages": len(result.messages),
+        },
+    )
 
     return {
         "campaign_html": result.final_html,
@@ -675,6 +803,7 @@ def _dialogue_node(state: CampaignState) -> CampaignState:
 
 def _package_node(state: CampaignState) -> CampaignState:
     logger.info("Workflow step start: package")
+    _pub(state, "node_started", {"node": "package"})
     agent_turns = _append_agent_turn(
         state,
         "package",
@@ -712,6 +841,15 @@ def _package_node(state: CampaignState) -> CampaignState:
     package_path = state["output_dir"] / "campaign_package.json"
     package_path.write_text(package.model_dump_json(indent=2), encoding="utf-8")
     logger.info("Workflow step done: package path={}", package_path)
+    _pub(
+        state,
+        "node_completed",
+        {
+            "node": "package",
+            "package_path": str(package_path),
+            "preview_html_path": str(state["preview_html_path"]),
+        },
+    )
     return {"package": package, "agent_turns": agent_turns}
 
 
