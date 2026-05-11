@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useRunStore } from "@/store/run-store";
 import { cn } from "@/lib/utils";
 import { titleCase } from "@/lib/format";
-import type { NodeState } from "@/store/run-store";
+import type { NodeProgress, NodeState } from "@/store/run-store";
 import type { WorkflowNode } from "@/types/api";
 import { WORKFLOW_NODE_ORDER } from "@/types/api";
 
@@ -75,9 +75,40 @@ function TimelineRow({ node, state, isLast }: TimelineRowProps) {
               {state.status === "running" ? "Working…" : "Pending"}
             </p>
           )}
+          {state.status === "running" && <ProgressLine node={node} />}
         </div>
       </div>
     </li>
+  );
+}
+
+/**
+ * Per-row subscriber — selects only this node's progress entry so a high-rate
+ * delta on one row does not re-render the other timeline rows.
+ */
+function ProgressLine({ node }: { node: WorkflowNode }) {
+  const progress = useRunStore((s) => s.nodeProgress[node]);
+  if (!progress || !progress.text) return null;
+  return <ProgressBody progress={progress} />;
+}
+
+function ProgressBody({ progress }: { progress: NodeProgress }) {
+  if (progress.kind === "status") {
+    return (
+      <p className="mt-1 line-clamp-3 text-xs text-muted-foreground/90">
+        <span className="mr-1 text-muted-foreground/60">•</span>
+        {progress.text}
+      </p>
+    );
+  }
+  return (
+    <p className="mt-1 line-clamp-4 whitespace-pre-wrap break-words text-xs italic leading-relaxed text-muted-foreground/90">
+      {progress.text}
+      <span
+        aria-hidden
+        className="ml-0.5 inline-block h-2.5 w-0.5 translate-y-0.5 animate-pulse bg-current opacity-70"
+      />
+    </p>
   );
 }
 

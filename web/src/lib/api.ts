@@ -62,3 +62,7 @@ export function fileUrl(runId: string, fullPath: string | null | undefined): str
 export function eventStreamUrl(runId: string): string {
   return `/api/runs/${encodeURIComponent(runId)}/events`;
 }
+
+export function packageZipUrl(runId: string): string {
+  return `/api/runs/${encodeURIComponent(runId)}/package.zip`;
+}

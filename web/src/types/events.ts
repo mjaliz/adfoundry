@@ -82,6 +82,12 @@ export interface NodeCompletedData {
   preview_html_path?: string;
 }
 
+export interface NodeProgressData {
+  node: WorkflowNode;
+  text: string;
+  kind: "delta" | "status";
+}
+
 export interface AgentMessageStartedData {
   role: AgentRole;
   attempt: number;
@@ -133,6 +139,7 @@ export type RunEvent =
   | BaseEvent<"run_failed", RunFailedData>
   | BaseEvent<"node_started", NodeStartedData>
   | BaseEvent<"node_completed", NodeCompletedData>
+  | BaseEvent<"node_progress", NodeProgressData>
   | BaseEvent<"agent_message_started", AgentMessageStartedData>
   | BaseEvent<"agent_message_delta", AgentMessageDeltaData>
   | BaseEvent<"agent_message_completed", AgentMessageCompletedData>
@@ -149,6 +156,7 @@ export const RUN_EVENT_TYPES: readonly RunEventType[] = [
   "run_failed",
   "node_started",
   "node_completed",
+  "node_progress",
   "agent_message_started",
   "agent_message_delta",
   "agent_message_completed",

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import threading
+import zipfile
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, AsyncIterator
@@ -10,7 +12,7 @@ from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel
 from loguru import logger
 
@@ -238,6 +240,81 @@ def get_artifact(run_id: str, filename: str) -> FileResponse:
         else None
     )
     return FileResponse(path, media_type=media)
+
+
+def _validate_run_id(run_id: str) -> None:
+    if "/" in run_id or "\\" in run_id or ".." in run_id:
+        raise HTTPException(status_code=400, detail="invalid run id")
+
+
+def _resolve_inside(run_dir: Path, candidate: str | None) -> Path | None:
+    """Resolve `candidate` against `run_dir`, returning the path only if it
+    lives inside `run_dir`. Accepts both relative basenames (e.g. ``index.html``)
+    and absolute paths (e.g. ``output/<id>/index.html`` as stored in the JSON).
+    Returns None for falsy inputs or paths that escape the run dir."""
+    if not candidate:
+        return None
+    raw = Path(candidate)
+    path = raw if raw.is_absolute() else run_dir / raw.name
+    resolved = path.resolve()
+    root = run_dir.resolve()
+    if not str(resolved).startswith(str(root)):
+        return None
+    if not resolved.exists() or not resolved.is_file():
+        return None
+    return resolved
+
+
+def _zip_member(
+    zf: zipfile.ZipFile, run_dir: Path, source: str | None, archive_name: str
+) -> None:
+    path = _resolve_inside(run_dir, source)
+    if path is None:
+        logger.debug("Skipping zip member %s — source %r missing", archive_name, source)
+        return
+    zf.write(path, arcname=archive_name)
+
+
+@app.get("/api/runs/{run_id}/package.zip")
+def get_package_zip(run_id: str) -> Response:
+    _validate_run_id(run_id)
+    run_dir = (_output_root() / run_id).resolve()
+    root = _output_root().resolve()
+    if not str(run_dir).startswith(str(root)):
+        raise HTTPException(status_code=400, detail="path traversal blocked")
+    package_path = run_dir / "campaign_package.json"
+    if not package_path.exists():
+        raise HTTPException(status_code=404, detail="package not ready")
+
+    try:
+        package = json.loads(package_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=500, detail=f"invalid package.json: {exc}")
+
+    image_asset = package.get("campaign_image_asset") or {}
+    hero_source = image_asset.get("hero_image_path") or image_asset.get(
+        "generated_image_path"
+    )
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.write(package_path, arcname="campaign_package.json")
+        _zip_member(zf, run_dir, package.get("preview_html_path"), "index.html")
+        _zip_member(
+            zf, run_dir, package.get("desktop_screenshot"), "campaign_desktop.png"
+        )
+        _zip_member(
+            zf, run_dir, package.get("mobile_screenshot"), "campaign_mobile.png"
+        )
+        _zip_member(zf, run_dir, hero_source, "hero.png")
+
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{run_id}.zip"',
+        },
+    )
 
 
 @app.get("/api/health")

@@ -1,11 +1,12 @@
 import { Link } from "react-router-dom";
-import { ArrowLeft, Clock } from "lucide-react";
+import { ArrowLeft, Clock, Download } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/status-badge";
 import { useRunStore } from "@/store/run-store";
 import { useElapsed } from "@/hooks/use-elapsed";
+import { packageZipUrl } from "@/lib/api";
 import { shortRunId } from "@/lib/format";
 
 interface RunHeaderProps {
@@ -40,7 +41,23 @@ export function RunHeader({ runId }: RunHeaderProps) {
           </Badge>
         )}
         {brief?.theme && <Badge variant="secondary">{brief.theme}</Badge>}
-        <span className="ml-auto inline-flex items-center gap-1.5 font-mono text-xs text-muted-foreground tabular-nums">
+        {status === "completed" && (
+          <Button asChild size="sm" variant="secondary" className="ml-auto gap-1.5">
+            <a
+              href={packageZipUrl(runId)}
+              download={`${runId}.zip`}
+              rel="noopener"
+            >
+              <Download className="h-4 w-4" />
+              Download package
+            </a>
+          </Button>
+        )}
+        <span
+          className={`${
+            status === "completed" ? "" : "ml-auto "
+          }inline-flex items-center gap-1.5 font-mono text-xs text-muted-foreground tabular-nums`}
+        >
           <Clock className="h-3.5 w-3.5" />
           {elapsed}
         </span>

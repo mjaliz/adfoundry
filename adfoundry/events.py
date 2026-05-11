@@ -14,6 +14,7 @@ EventType = Literal[
     "run_started",
     "node_started",
     "node_completed",
+    "node_progress",
     "agent_message_started",
     "agent_message_delta",
     "agent_message_completed",

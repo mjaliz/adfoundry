@@ -41,6 +41,11 @@ export interface NodeState {
   data?: NodeCompletedData;
 }
 
+export interface NodeProgress {
+  text: string;
+  kind: "delta" | "status";
+}
+
 export interface RenderArtifacts {
   attempt: number;
   htmlPath: string;
@@ -68,6 +73,8 @@ export interface RunState {
   /** Total events seen — used for guarding against duplicate appends. */
   lastSeq: number;
   nodes: Record<WorkflowNode, NodeState>;
+  /** Live streaming/status text per node — populated while a node is running. */
+  nodeProgress: Record<WorkflowNode, NodeProgress | null>;
   /** Ordered list of bubble ids — drives transcript layout. */
   transcript: BubbleId[];
   /** Per-bubble payload. Mutated as deltas arrive. */
@@ -90,6 +97,16 @@ const INITIAL_NODES: Record<WorkflowNode, NodeState> = {
   package: { ...EMPTY_NODE },
 };
 
+const INITIAL_NODE_PROGRESS: Record<WorkflowNode, NodeProgress | null> = {
+  research: null,
+  brand: null,
+  strategy: null,
+  creative: null,
+  image_asset: null,
+  dialogue: null,
+  package: null,
+};
+
 export const INITIAL_RUN_STATE: RunState = {
   runId: null,
   status: "unknown",
@@ -102,6 +119,7 @@ export const INITIAL_RUN_STATE: RunState = {
   overallScore: null,
   lastSeq: 0,
   nodes: INITIAL_NODES,
+  nodeProgress: INITIAL_NODE_PROGRESS,
   transcript: [],
   bubbles: {},
   render: null,
@@ -180,6 +198,10 @@ function reducer(state: RunState, event: RunEvent): RunState {
         ...state.nodes,
         [event.data.node]: { status: "running", summary: "" },
       };
+      next.nodeProgress = {
+        ...state.nodeProgress,
+        [event.data.node]: null,
+      };
       return next;
     }
     case "node_completed": {
@@ -191,6 +213,23 @@ function reducer(state: RunState, event: RunEvent): RunState {
           data: event.data,
         },
       };
+      next.nodeProgress = {
+        ...state.nodeProgress,
+        [event.data.node]: null,
+      };
+      return next;
+    }
+    case "node_progress": {
+      const { node, text, kind } = event.data;
+      const existing = state.nodeProgress[node];
+      const merged: NodeProgress =
+        kind === "delta"
+          ? {
+              kind: "delta",
+              text: (existing?.kind === "delta" ? existing.text : "") + text,
+            }
+          : { kind: "status", text };
+      next.nodeProgress = { ...state.nodeProgress, [node]: merged };
       return next;
     }
     case "agent_message_started": {

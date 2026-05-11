@@ -57,6 +57,7 @@ class ConfidenceScores(BaseModel):
 
 
 class BrandKit(BaseModel):
+    chat_message: str = ""
     brand_name: str
     industry: str
     primary_colors: list[str]
@@ -106,6 +107,7 @@ class DecisionRecord(BaseModel):
 
 
 class CampaignCopy(BaseModel):
+    chat_message: str = ""
     headline: str
     subheadline: str
     cta: str
@@ -114,6 +116,7 @@ class CampaignCopy(BaseModel):
 
 
 class VisualConcept(BaseModel):
+    chat_message: str = ""
     concept_name: str
     image_direction: str
     layout_direction: str

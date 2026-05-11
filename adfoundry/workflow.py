@@ -4,7 +4,7 @@ import json
 import warnings
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TypedDict
+from typing import Callable, TypedDict
 from uuid import uuid4
 
 from langchain_core._api.deprecation import LangChainPendingDeprecationWarning
@@ -95,11 +95,28 @@ def _pub(state: CampaignState, type: EventType, data: dict | None = None) -> Non
         bus.publish(type, data or {})
 
 
+def _progress_delta_emitter(state: CampaignState, node: str) -> Callable[[str], None]:
+    """Return an on_chat_delta callback that publishes node_progress delta events."""
+
+    def _emit(text: str) -> None:
+        if not text:
+            return
+        _pub(state, "node_progress", {"node": node, "text": text, "kind": "delta"})
+
+    return _emit
+
+
+def _progress_status(state: CampaignState, node: str, text: str) -> None:
+    _pub(state, "node_progress", {"node": node, "text": text, "kind": "status"})
+
+
 class StrategyOptionsOutput(BaseModel):
+    chat_message: str = ""
     options: list[StrategyOption]
 
 
 class DecisionsOutput(BaseModel):
+    chat_message: str = ""
     decisions: list[DecisionRecord]
 
 
@@ -214,7 +231,9 @@ def build_graph():
 def _research_node(state: CampaignState) -> CampaignState:
     logger.info("Workflow step start: research")
     _pub(state, "node_started", {"node": "research"})
+    _progress_status(state, "research", f"Fetching landing page {state['brief'].url}…")
     page = research_page(state["brief"], state["output_dir"], state["mode_requested"])
+    _progress_status(state, "research", "Sampling colors and screenshots…")
     activities = _append_activity(
         state,
         "Browser Research Agent",
@@ -278,10 +297,18 @@ def _brand_node(state: CampaignState) -> CampaignState:
             "Prefer concrete products, colors, voice, and visual cues over generic category assumptions.",
             "Calibrate confidence honestly; lower confidence when evidence is thin or conflicting.",
             "Capture brand constraints that protect authenticity, rights, claims, and visual consistency.",
+            "Use chat_message to narrate what you are producing as one short, user-facing sentence (e.g. 'Reading the palette to ground the brand voice…'). The UI streams this field token-by-token.",
         ],
     )
     system, user = json_prompt("Brand Analyst Agent", context)
-    live = OpenAIModelGateway(state["mode_requested"]).parse(BrandKit, system, user)
+    live = OpenAIModelGateway(state["mode_requested"]).stream_messages(
+        BrandKit,
+        [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+        on_chat_delta=_progress_delta_emitter(state, "brand"),
+    )
     brand = live or fallback
     logger.info(
         "Workflow step done: brand brand={} live_used={} primary_colors={}",
@@ -337,11 +364,17 @@ def _strategy_node(state: CampaignState) -> CampaignState:
             "Prioritize brand fit, audience relevance, conversion potential, and visual distinctiveness.",
             "Avoid generic holiday, gift-guide, luxury, and discount-led angles unless the evidence supports them.",
             "Score implementation risk honestly and explain trade-offs in decision-grade language.",
+            "Use chat_message to narrate the angle you are exploring as one short, user-facing sentence (e.g. 'Sketching three strategic territories…'). The UI streams this field token-by-token.",
         ],
     )
     system, user = json_prompt("Campaign Strategy Debate", context)
-    live_options = OpenAIModelGateway(state["mode_requested"]).parse(
-        StrategyOptionsOutput, system, user
+    live_options = OpenAIModelGateway(state["mode_requested"]).stream_messages(
+        StrategyOptionsOutput,
+        [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+        on_chat_delta=_progress_delta_emitter(state, "strategy"),
     )
     options = (
         live_options.options
@@ -373,11 +406,18 @@ def _strategy_node(state: CampaignState) -> CampaignState:
             "Explain why the chosen option is stronger for the brand, audience, and campaign goal.",
             "Reject generic or unsupported directions explicitly when they weaken brand credibility.",
             "Keep each decision concise, specific, and tied to the supplied scorecard evidence.",
+            "Use chat_message to narrate the decision you are recording as one short, user-facing sentence (e.g. 'Recording why the chosen angle wins…'). The UI streams this field token-by-token.",
         ],
     )
     system, user = json_prompt("Decision Board Agent", decision_context)
-    live_decisions = OpenAIModelGateway(state["mode_requested"]).parse(
-        DecisionsOutput, system, user
+    _progress_status(state, "strategy", "Recording strategy decisions…")
+    live_decisions = OpenAIModelGateway(state["mode_requested"]).stream_messages(
+        DecisionsOutput,
+        [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+        on_chat_delta=_progress_delta_emitter(state, "strategy"),
     )
     decisions = (
         live_decisions.decisions
@@ -453,16 +493,32 @@ def _creative_node(state: CampaignState) -> CampaignState:
             "Translate the strategy into layout, image, color, and composition choices with clear constraints.",
             "Use brand colors as integrated accents unless the evidence supports a more immersive treatment.",
             "Avoid decorative seasonality that competes with product, brand, or conversion clarity.",
+            "Use chat_message to narrate the creative direction you are forming as one short, user-facing sentence (e.g. 'Sketching the hero composition…'). The UI streams this field token-by-token.",
         ],
     )
     system, user = json_prompt("Creative Director Agent", visual_context)
     visual = (
-        OpenAIModelGateway(state["mode_requested"]).parse(VisualConcept, system, user)
+        OpenAIModelGateway(state["mode_requested"]).stream_messages(
+            VisualConcept,
+            [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            on_chat_delta=_progress_delta_emitter(state, "creative"),
+        )
         or fallback_visual
     )
+    _progress_status(state, "creative", "Writing campaign copy…")
     system, user = json_prompt("Copywriter Agent", _copywriter_context(context, brief))
     campaign_copy = (
-        OpenAIModelGateway(state["mode_requested"]).parse(CampaignCopy, system, user)
+        OpenAIModelGateway(state["mode_requested"]).stream_messages(
+            CampaignCopy,
+            [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            on_chat_delta=_progress_delta_emitter(state, "creative"),
+        )
         or fallback_copy
     )
     campaign_copy = _polish_campaign_copy(brief, campaign_copy)
@@ -531,7 +587,8 @@ def _copywriter_context(context: str, brief: CampaignBrief) -> str:
         "- Make the CTA honor the brief's preferred action when it is plausible and brand-safe.\n"
         "- Do not invent discounts, claims, product capabilities, exclusivity, or endorsements.\n"
         "- Do not repeat the theme literally unless it is essential to the idea.\n"
-        "- Provide alternates that explore different creative territories, not reordered versions of the same label."
+        "- Provide alternates that explore different creative territories, not reordered versions of the same label.\n"
+        "- Use chat_message to narrate the headline you are testing as one short, user-facing sentence (e.g. 'Trying a quieter, brand-forward H1…'). The UI streams this field token-by-token."
     )
 
 
@@ -600,6 +657,7 @@ def _fallback_campaign_headline(brief: CampaignBrief, copy: CampaignCopy) -> str
 def _image_asset_node(state: CampaignState) -> CampaignState:
     logger.info("Workflow step start: image_asset")
     _pub(state, "node_started", {"node": "image_asset"})
+    _progress_status(state, "image_asset", "Preparing references and generating hero…")
     asset = build_campaign_image_asset(
         state["brief"],
         state["page_research"],
@@ -804,6 +862,7 @@ def _dialogue_node(state: CampaignState) -> CampaignState:
 def _package_node(state: CampaignState) -> CampaignState:
     logger.info("Workflow step start: package")
     _pub(state, "node_started", {"node": "package"})
+    _progress_status(state, "package", "Assembling campaign_package.json…")
     agent_turns = _append_agent_turn(
         state,
         "package",
