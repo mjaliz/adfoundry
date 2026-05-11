@@ -1,6 +1,7 @@
 import { Link, Outlet } from "react-router-dom";
-import { Sparkles } from "lucide-react";
+import { Settings, Sparkles } from "lucide-react";
 
+import { Button } from "@/components/ui/button";
 import { Toaster } from "@/components/ui/sonner";
 
 export function AppShell() {
@@ -17,6 +18,18 @@ export function AppShell() {
               Live agentic campaign builder
             </span>
           </Link>
+          <Button
+            asChild
+            variant="ghost"
+            size="sm"
+            className="ml-auto gap-1.5"
+            title="Configure provider and API key"
+          >
+            <Link to="/setup">
+              <Settings className="h-4 w-4" />
+              <span className="hidden sm:inline">Settings</span>
+            </Link>
+          </Button>
         </div>
       </header>
       <main className="mx-auto max-w-screen-2xl px-6 py-6">

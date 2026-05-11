@@ -252,6 +252,137 @@ def test_get_package_zip_skips_missing_optional_assets(
         }
 
 
+def test_start_run_threads_per_request_credentials(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """POSTing provider+api_key results in run_campaign receiving an override
+    Settings whose openai_base_url and openai_api_key reflect the request."""
+    _patch_output_root(monkeypatch, tmp_path)
+
+    captured: dict[str, object] = {}
+
+    def fake_run_campaign(**kwargs: object) -> None:
+        # Mirror what the real run does so the thread shuts down cleanly.
+        bus = kwargs.get("event_bus")
+        if bus is not None:
+            bus.publish(  # type: ignore[union-attr]
+                "run_started",
+                {
+                    "run_id": kwargs.get("run_id"),
+                    "mode": kwargs.get("mode"),
+                    "brief": {},
+                    "output_dir": "",
+                },
+            )
+        captured["settings"] = kwargs.get("settings")
+
+    monkeypatch.setattr(server_module, "run_campaign", fake_run_campaign)
+    client = TestClient(app)
+
+    resp = client.post(
+        "/api/runs",
+        json={
+            "brief": {"url": "https://www.nike.com", "theme": "Holiday"},
+            "mode": "fixture",
+            "provider": "avalai",
+            "api_key": "sk-from-frontend",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    run_id = resp.json()["run_id"]
+    assert _wait_for(lambda: "settings" in captured, timeout=5.0)
+    assert _wait_for(lambda: server_module._get_active(run_id) is None, timeout=5.0)
+
+    settings = captured["settings"]
+    assert settings is not None
+    assert settings.openai_api_key == "sk-from-frontend"
+    assert settings.openai_base_url == "https://api.avalai.ir/v1"
+
+
+def test_start_run_falls_back_to_env_when_no_credentials(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """When the request omits provider/api_key, run_campaign receives
+    settings=None so it falls back to the env-loaded defaults."""
+    _patch_output_root(monkeypatch, tmp_path)
+
+    captured: dict[str, object] = {}
+
+    def fake_run_campaign(**kwargs: object) -> None:
+        bus = kwargs.get("event_bus")
+        if bus is not None:
+            bus.publish(  # type: ignore[union-attr]
+                "run_started",
+                {
+                    "run_id": kwargs.get("run_id"),
+                    "mode": kwargs.get("mode"),
+                    "brief": {},
+                    "output_dir": "",
+                },
+            )
+        captured["settings"] = kwargs.get("settings")
+
+    monkeypatch.setattr(server_module, "run_campaign", fake_run_campaign)
+    client = TestClient(app)
+
+    resp = client.post(
+        "/api/runs",
+        json={"brief": {"url": "https://www.nike.com"}, "mode": "fixture"},
+    )
+    assert resp.status_code == 200, resp.text
+    run_id = resp.json()["run_id"]
+    assert _wait_for(lambda: "settings" in captured, timeout=5.0)
+    assert _wait_for(lambda: server_module._get_active(run_id) is None, timeout=5.0)
+
+    assert captured["settings"] is None
+
+
+def test_start_run_openai_provider_clears_base_url(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """provider='openai' produces a Settings with openai_base_url=None
+    so the OpenAI default endpoint is used."""
+    _patch_output_root(monkeypatch, tmp_path)
+
+    captured: dict[str, object] = {}
+
+    def fake_run_campaign(**kwargs: object) -> None:
+        bus = kwargs.get("event_bus")
+        if bus is not None:
+            bus.publish(  # type: ignore[union-attr]
+                "run_started",
+                {
+                    "run_id": kwargs.get("run_id"),
+                    "mode": kwargs.get("mode"),
+                    "brief": {},
+                    "output_dir": "",
+                },
+            )
+        captured["settings"] = kwargs.get("settings")
+
+    monkeypatch.setattr(server_module, "run_campaign", fake_run_campaign)
+    client = TestClient(app)
+
+    resp = client.post(
+        "/api/runs",
+        json={
+            "brief": {"url": "https://www.nike.com"},
+            "mode": "fixture",
+            "provider": "openai",
+            "api_key": "sk-openai",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    run_id = resp.json()["run_id"]
+    assert _wait_for(lambda: "settings" in captured, timeout=5.0)
+    assert _wait_for(lambda: server_module._get_active(run_id) is None, timeout=5.0)
+
+    settings = captured["settings"]
+    assert settings is not None
+    assert settings.openai_api_key == "sk-openai"
+    assert settings.openai_base_url is None
+
+
 def test_get_package_zip_falls_back_to_generated_image(
     monkeypatch, tmp_path: Path
 ) -> None:

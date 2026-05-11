@@ -4,6 +4,7 @@ import type {
   RunSummary,
   StartRunResponse,
 } from "@/types/api";
+import { getCredentials } from "@/lib/credentials";
 
 export class ApiError extends Error {
   status: number;
@@ -33,9 +34,15 @@ export async function startRun(
   brief: CampaignBrief,
   mode: RunMode,
 ): Promise<StartRunResponse> {
+  const credentials = getCredentials();
+  const payload: Record<string, unknown> = { brief, mode };
+  if (credentials) {
+    payload.provider = credentials.provider;
+    payload.api_key = credentials.apiKey;
+  }
   return jsonRequest<StartRunResponse>("/api/runs", {
     method: "POST",
-    body: JSON.stringify({ brief, mode }),
+    body: JSON.stringify(payload),
   });
 }
 

@@ -7,7 +7,7 @@ import threading
 import zipfile
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Literal
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException
@@ -18,8 +18,35 @@ from loguru import logger
 
 from adfoundry.events import RunEvent, RunEventBus, replay_events
 from adfoundry.models import CampaignBrief, RunMode
-from adfoundry.settings import get_settings
+from adfoundry.settings import Settings, get_settings
 from adfoundry.workflow import run_campaign
+
+
+Provider = Literal["openai", "avalai"]
+
+_PROVIDER_BASE_URLS: dict[Provider, str | None] = {
+    "openai": None,
+    "avalai": "https://api.avalai.ir/v1",
+}
+
+
+def _resolve_runtime_settings(
+    provider: Provider | None, api_key: str | None
+) -> Settings | None:
+    """Build a Settings override for a single run.
+
+    Returns None when no credentials were supplied, signalling that the
+    default env-based settings should be used (CLI / dev fallback path).
+    """
+    if not provider and not api_key:
+        return None
+    base = get_settings()
+    update: dict[str, Any] = {}
+    if api_key:
+        update["openai_api_key"] = api_key
+    if provider:
+        update["openai_base_url"] = _PROVIDER_BASE_URLS.get(provider)
+    return base.model_copy(update=update)
 
 
 # Module-level registry of live runs: run_id -> bus.
@@ -30,6 +57,8 @@ _active_lock = threading.Lock()
 class StartRunRequest(BaseModel):
     brief: CampaignBrief
     mode: RunMode = "hybrid"
+    provider: Provider | None = None
+    api_key: str | None = None
 
 
 class StartRunResponse(BaseModel):
@@ -77,7 +106,13 @@ def _format_sse(event: RunEvent) -> str:
     )
 
 
-def _run_in_thread(brief: CampaignBrief, mode: RunMode, run_id: str, bus: RunEventBus) -> None:
+def _run_in_thread(
+    brief: CampaignBrief,
+    mode: RunMode,
+    run_id: str,
+    bus: RunEventBus,
+    settings: Settings | None,
+) -> None:
     try:
         run_campaign(
             brief=brief,
@@ -85,6 +120,7 @@ def _run_in_thread(brief: CampaignBrief, mode: RunMode, run_id: str, bus: RunEve
             output_root=_output_root(),
             event_bus=bus,
             run_id=run_id,
+            settings=settings,
         )
     except Exception as exc:
         logger.exception("Run {} failed: {}", run_id, exc)
@@ -161,9 +197,10 @@ def start_run(request: StartRunRequest) -> StartRunResponse:
     output_dir.mkdir(parents=True, exist_ok=True)
     bus = RunEventBus(run_id, output_dir)
     _register(run_id, bus)
+    runtime_settings = _resolve_runtime_settings(request.provider, request.api_key)
     thread = threading.Thread(
         target=_run_in_thread,
-        args=(request.brief, request.mode, run_id, bus),
+        args=(request.brief, request.mode, run_id, bus, runtime_settings),
         daemon=True,
         name=f"run-{run_id}",
     )

@@ -55,7 +55,7 @@ from adfoundry.models import (
     ensure_http_url,
 )
 from adfoundry.qa import should_repair
-from adfoundry.settings import get_settings
+from adfoundry.settings import Settings, get_settings
 
 
 class CampaignState(TypedDict, total=False):
@@ -87,6 +87,7 @@ class CampaignState(TypedDict, total=False):
     repair_attempts: int
     package: CampaignPackage
     event_bus: RunEventBus | None
+    runtime_settings: Settings
 
 
 def _pub(state: CampaignState, type: EventType, data: dict | None = None) -> None:
@@ -126,8 +127,9 @@ def run_campaign(
     output_root: Path | str | None = None,
     event_bus: RunEventBus | None = None,
     run_id: str | None = None,
+    settings: Settings | None = None,
 ) -> CampaignPackage:
-    settings = get_settings()
+    settings = settings or get_settings()
     mode = mode or settings.default_run_mode
     output_root = output_root or settings.output_root
     normalized_brief = brief.model_copy(update={"url": ensure_http_url(brief.url)})
@@ -165,6 +167,7 @@ def run_campaign(
         "dialogue_messages": [],
         "repair_attempts": 0,
         "event_bus": event_bus,
+        "runtime_settings": settings,
     }
     try:
         event_bus.publish(
@@ -301,7 +304,7 @@ def _brand_node(state: CampaignState) -> CampaignState:
         ],
     )
     system, user = json_prompt("Brand Analyst Agent", context)
-    live = OpenAIModelGateway(state["mode_requested"]).stream_messages(
+    live = OpenAIModelGateway(state["mode_requested"], settings=state["runtime_settings"]).stream_messages(
         BrandKit,
         [
             {"role": "system", "content": system},
@@ -368,7 +371,7 @@ def _strategy_node(state: CampaignState) -> CampaignState:
         ],
     )
     system, user = json_prompt("Campaign Strategy Debate", context)
-    live_options = OpenAIModelGateway(state["mode_requested"]).stream_messages(
+    live_options = OpenAIModelGateway(state["mode_requested"], settings=state["runtime_settings"]).stream_messages(
         StrategyOptionsOutput,
         [
             {"role": "system", "content": system},
@@ -411,7 +414,7 @@ def _strategy_node(state: CampaignState) -> CampaignState:
     )
     system, user = json_prompt("Decision Board Agent", decision_context)
     _progress_status(state, "strategy", "Recording strategy decisions…")
-    live_decisions = OpenAIModelGateway(state["mode_requested"]).stream_messages(
+    live_decisions = OpenAIModelGateway(state["mode_requested"], settings=state["runtime_settings"]).stream_messages(
         DecisionsOutput,
         [
             {"role": "system", "content": system},
@@ -498,7 +501,7 @@ def _creative_node(state: CampaignState) -> CampaignState:
     )
     system, user = json_prompt("Creative Director Agent", visual_context)
     visual = (
-        OpenAIModelGateway(state["mode_requested"]).stream_messages(
+        OpenAIModelGateway(state["mode_requested"], settings=state["runtime_settings"]).stream_messages(
             VisualConcept,
             [
                 {"role": "system", "content": system},
@@ -511,7 +514,7 @@ def _creative_node(state: CampaignState) -> CampaignState:
     _progress_status(state, "creative", "Writing campaign copy…")
     system, user = json_prompt("Copywriter Agent", _copywriter_context(context, brief))
     campaign_copy = (
-        OpenAIModelGateway(state["mode_requested"]).stream_messages(
+        OpenAIModelGateway(state["mode_requested"], settings=state["runtime_settings"]).stream_messages(
             CampaignCopy,
             [
                 {"role": "system", "content": system},
@@ -665,6 +668,7 @@ def _image_asset_node(state: CampaignState) -> CampaignState:
         state["visual_concept"],
         state["output_dir"],
         state["mode_requested"],
+        settings=state["runtime_settings"],
     )
     message = (
         "Generated a seasonal hero image from brand references."
@@ -712,7 +716,7 @@ def _image_asset_node(state: CampaignState) -> CampaignState:
 def _dialogue_node(state: CampaignState) -> CampaignState:
     logger.info("Workflow step start: dialogue")
     _pub(state, "node_started", {"node": "dialogue"})
-    settings = get_settings()
+    settings = state["runtime_settings"]
     result: DialogueResult = run_html_qa_dialogue(
         brief=state["brief"],
         page_research=state["page_research"],
