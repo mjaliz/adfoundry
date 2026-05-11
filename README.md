@@ -119,6 +119,54 @@ Run tests:
 .venv/bin/python3 -m pytest
 ```
 
+## Docker / VPS Deployment
+
+The Docker setup runs the FastAPI server and production React client as two
+containers:
+
+- `server`: Python 3.12, uv-managed dependencies, FastAPI on port `8000`, and
+  Playwright Chromium installed in the image.
+- `web`: nginx serving the built React app on port `80` and proxying `/api/*`
+  requests, including SSE event streams, to the server container.
+
+Create your VPS environment file:
+
+```bash
+cp .env.example .env
+```
+
+Set at least `OPENAI_API_KEY` in `.env` for live or hybrid runs. Do not set
+`PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` for Docker; the server image installs its
+own browser. To run the client on another host port, set `ADFOUNDRY_WEB_PORT`,
+for example `ADFOUNDRY_WEB_PORT=8080`.
+
+Build and start both containers:
+
+```bash
+docker compose up -d --build
+```
+
+Open the app at:
+
+```text
+http://<your-vps-ip>/
+```
+
+The browser client calls the API through the same origin under `/api`. A quick
+server health check is available at:
+
+```text
+http://<your-vps-ip>/api/health
+```
+
+Generated campaign artifacts persist in the Docker volume
+`adfoundry_adfoundry_outputs`. To inspect logs:
+
+```bash
+docker compose logs -f server
+docker compose logs -f web
+```
+
 ## Product Vision
 
 AdFoundry should behave like an autonomous creative production team:

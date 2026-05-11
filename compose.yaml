@@ -1,0 +1,56 @@
+services:
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+    restart: unless-stopped
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5.5}
+      OPENAI_IMAGE_MODEL: ${OPENAI_IMAGE_MODEL:-gpt-image-1.5}
+      OPENAI_TIMEOUT_SECONDS: ${OPENAI_TIMEOUT_SECONDS:-45}
+      ADFOUNDRY_RUN_MODE: ${ADFOUNDRY_RUN_MODE:-hybrid}
+      ADFOUNDRY_OUTPUT_ROOT: /app/outputs
+      ADFOUNDRY_BROWSER_TIMEOUT_MS: ${ADFOUNDRY_BROWSER_TIMEOUT_MS:-12000}
+      ADFOUNDRY_BROWSER_HEADLESS: "true"
+      ADFOUNDRY_BROWSER_SLOW_MO_MS: ${ADFOUNDRY_BROWSER_SLOW_MO_MS:-0}
+      ADFOUNDRY_ENABLE_IMAGE_GENERATION: ${ADFOUNDRY_ENABLE_IMAGE_GENERATION:-true}
+      ADFOUNDRY_IMAGE_SIZE: ${ADFOUNDRY_IMAGE_SIZE:-1536x1024}
+      ADFOUNDRY_IMAGE_QUALITY: ${ADFOUNDRY_IMAGE_QUALITY:-medium}
+      ADFOUNDRY_IMAGE_FORMAT: ${ADFOUNDRY_IMAGE_FORMAT:-png}
+      ADFOUNDRY_IMAGE_MAX_REFERENCES: ${ADFOUNDRY_IMAGE_MAX_REFERENCES:-3}
+      ADFOUNDRY_HTML_MAX_ATTEMPTS: ${ADFOUNDRY_HTML_MAX_ATTEMPTS:-3}
+      ADFOUNDRY_HTML_MIN_SCORE: ${ADFOUNDRY_HTML_MIN_SCORE:-85}
+      ADFOUNDRY_HTML_REQUIRE_LIVE_QA: ${ADFOUNDRY_HTML_REQUIRE_LIVE_QA:-false}
+      ADFOUNDRY_LOG_LEVEL: ${ADFOUNDRY_LOG_LEVEL:-INFO}
+    volumes:
+      - adfoundry_outputs:/app/outputs
+    expose:
+      - "8000"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          ".venv/bin/python3",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=2).read()",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  web:
+    build:
+      context: .
+      dockerfile: web/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      server:
+        condition: service_healthy
+    ports:
+      - "${ADFOUNDRY_WEB_PORT:-80}:80"
+
+volumes:
+  adfoundry_outputs:

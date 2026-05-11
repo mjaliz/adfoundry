@@ -1,0 +1,14 @@
+.git
+.gitignore
+.venv
+__pycache__
+*.pyc
+.pytest_cache
+.playwright-mcp
+.env
+.env.*
+!.env.example
+outputs
+web/node_modules
+web/dist
+run-page-completed.png
